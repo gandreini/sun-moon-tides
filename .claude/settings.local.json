@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install netCDF4)",
+      "Bash(python3:*)",
+      "Bash(pip install timezonefinder)",
+      "Bash(pip install:*)"
+    ]
+  }
+}
