@@ -4,7 +4,11 @@
       "Bash(pip install netCDF4)",
       "Bash(python3:*)",
       "Bash(pip install timezonefinder)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(source:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(git -C /Users/giulioandreini/Desktop/Lavoro/tide-app log --oneline --all)",
+      "Bash(git -C /Users/giulioandreini/Desktop/Lavoro/tide-app show:*)"
     ]
   }
 }
