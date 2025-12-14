@@ -1,7 +1,9 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Union, Dict, Any
 from .tide_service import FES2022TideService, TidalDatum
+from datetime import datetime
 import os
 
 app = FastAPI(
@@ -11,7 +13,8 @@ app = FastAPI(
 )
 
 # Initialize service
-DATA_PATH = os.getenv('FES_DATA_PATH', '/data')
+# Default to current directory for local dev, /data for Docker
+DATA_PATH = os.getenv('FES_DATA_PATH', '.')
 tide_service = FES2022TideService(data_path=DATA_PATH)
 
 
@@ -44,23 +47,25 @@ class TideHeight(BaseModel):
     height_m: float
     height_ft: float
     datum: str
+    type: Optional[Literal['high', 'low']] = Field(None, exclude_if_none=True)  # Only present for high/low tide events
 
 
-@app.post("/api/v1/tides")
-async def get_tides(request: TideRequest) -> List[Union[TideEvent, TideHeight]]:
+@app.post("/api/v1/tides", response_model=None)
+async def get_tides(request: TideRequest):
     """
     Get tide predictions for a location.
 
     By default, returns high/low tide events (extrema only).
 
     If `interval` is specified (15, 30, or 60 minutes), returns tide heights
-    at regular intervals instead - useful for plotting tide curves.
+    at regular intervals with high/low labels. Points that correspond to
+    high or low tides will have a `type` field set to "high" or "low".
 
     Examples:
     - Without interval: Returns ~4 tides/day (high/low events)
-    - With interval=60: Returns 24 readings/day
-    - With interval=30: Returns 48 readings/day
-    - With interval=15: Returns 96 readings/day
+    - With interval=60: Returns 24 readings/day with high/low labels
+    - With interval=30: Returns 48 readings/day with high/low labels
+    - With interval=15: Returns 96 readings/day with high/low labels
     """
     try:
         # Convert datum string to enum
@@ -76,7 +81,7 @@ async def get_tides(request: TideRequest) -> List[Union[TideEvent, TideHeight]]:
             )
             return tides
         else:
-            # Return tide heights at regular intervals
+            # Return tide heights at regular intervals, with high/low events inserted at exact times
             heights = tide_service.get_tide_heights(
                 lat=request.lat,
                 lon=request.lon,
@@ -84,7 +89,49 @@ async def get_tides(request: TideRequest) -> List[Union[TideEvent, TideHeight]]:
                 interval_minutes=request.interval,
                 datum=datum_enum
             )
-            return heights
+            
+            # Also get high/low tide events to insert at their exact times
+            events = tide_service.predict_tides(
+                request.lat,
+                request.lon,
+                request.days,
+                datum=datum_enum
+            )
+            
+            # Combine heights and events, then sort by datetime
+            combined = []
+            
+            # Add all interval heights (without type field)
+            for height in heights:
+                # Create dict without type field for regular interval points
+                combined.append({
+                    'datetime': height['datetime'],
+                    'height_m': height['height_m'],
+                    'height_ft': height['height_ft'],
+                    'datum': height['datum']
+                })
+            
+            # Add high/low events with type field at their exact times
+            for event in events:
+                combined.append({
+                    'type': event['type'],
+                    'datetime': event['datetime'],
+                    'height_m': event['height_m'],
+                    'height_ft': event['height_ft'],
+                    'datum': event['datum']
+                })
+            
+            # Sort by datetime
+            def parse_datetime_for_sort(dt_str):
+                if dt_str.endswith('Z'):
+                    dt_str = dt_str[:-1] + '+00:00'
+                return datetime.fromisoformat(dt_str)
+            
+            combined.sort(key=lambda x: parse_datetime_for_sort(x['datetime']))
+            
+            # Return the combined list directly - regular interval points don't have 'type' key
+            # Only high/low events have 'type' key, so no need to filter None values
+            return combined
     except ValueError as e:
         raise HTTPException(400, detail=str(e))
     except Exception as e:
