@@ -28,7 +28,8 @@ import os
 import numpy as np
 from netCDF4 import Dataset
 from datetime import datetime, timedelta
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Literal
+from enum import Enum
 
 try:
     from zoneinfo import ZoneInfo
@@ -36,6 +37,22 @@ except ImportError:
     from backports.zoneinfo import ZoneInfo
 
 from timezonefinder import TimezoneFinder
+
+
+class TidalDatum(str, Enum):
+    """
+    Supported tidal datum reference levels.
+
+    - MSL (Mean Sea Level): Average of all hourly water levels. This is the default.
+    - MLLW (Mean Lower Low Water): Average of the lower of the two daily low tides.
+      Used in nautical charts in the US and many other countries.
+    - LAT (Lowest Astronomical Tide): The lowest tide level predicted under average
+      meteorological conditions and any astronomical conditions. Used in charts in
+      UK, Europe, and many other regions.
+    """
+    MSL = "msl"
+    MLLW = "mllw"
+    LAT = "lat"
 
 
 def _julian_centuries(dt: datetime) -> float:
@@ -679,7 +696,8 @@ class FES2022TideService:
         lon: float,
         days: int = 7,
         timezone_str: Optional[str] = None,
-        datum_offset: float = 0.0
+        datum: TidalDatum = TidalDatum.MSL,
+        datum_offset: Optional[float] = None
     ) -> List[Dict]:
         """
         Predict tide events (high and low tides) for a given location.
@@ -688,11 +706,18 @@ class FES2022TideService:
             lat: Latitude in degrees
             lon: Longitude in degrees
             days: Number of days to predict (1-30)
-            timezone_str: Timezone string (e.g., 'America/Los_Angeles') or None for UTC
-            datum_offset: Offset in meters to apply (positive = subtract from MSL to get chart datum)
+            timezone_str: Timezone string (e.g., 'America/Los_Angeles') or None for auto-detect
+            datum: Tidal datum reference (MSL, MLLW, or LAT). Default is MSL.
+            datum_offset: Optional manual offset in meters (overrides datum parameter if provided).
+                         Deprecated: use datum parameter instead.
 
         Returns:
-            List of tide event dictionaries with keys: type, datetime, height_m, height_ft
+            List of tide event dictionaries with keys:
+            - type: 'high' or 'low'
+            - datetime: ISO 8601 datetime string
+            - height_m: Height in meters (relative to specified datum)
+            - height_ft: Height in feet (relative to specified datum)
+            - datum: The datum reference used for this prediction
         """
         # Auto-detect timezone from coordinates if not provided
         if timezone_str is None:
@@ -745,8 +770,18 @@ class FES2022TideService:
         # Calculate tide heights using astronomical arguments
         heights = self._calculate_harmonic_tide_at_times(datetimes, constituents)
 
-        # Apply datum offset (subtract offset to convert MSL to chart datum)
-        heights -= datum_offset
+        # Calculate and apply datum offset
+        if datum_offset is not None:
+            # Use manual offset if provided (deprecated path - keeps old behavior)
+            # Old behavior: subtract offset (e.g., datum_offset=1.0 lowers heights by 1.0m)
+            heights -= datum_offset
+            datum_used = "custom"
+        else:
+            # Calculate offset based on datum parameter (new behavior)
+            offset_to_apply = self._calculate_datum_offset(lat, lon, datum, days=min(days, 30))
+            # New behavior: add offset (offsets are already sign-corrected)
+            heights += offset_to_apply
+            datum_used = datum.value
 
         # Find high and low tides (local extrema)
         events = []
@@ -798,7 +833,8 @@ class FES2022TideService:
                 'type': tide_type,
                 'datetime': event_time.isoformat(),
                 'height_m': round(height_m, 3),
-                'height_ft': round(height_ft, 3)
+                'height_ft': round(height_ft, 3),
+                'datum': datum_used
             })
 
         # Sort by time
@@ -806,9 +842,75 @@ class FES2022TideService:
 
         return events
     
+    def _calculate_datum_offset(
+        self,
+        lat: float,
+        lon: float,
+        target_datum: TidalDatum,
+        days: int = 30
+    ) -> float:
+        """
+        Calculate the offset needed to convert from MSL to the target datum.
+
+        Args:
+            lat: Latitude in degrees
+            lon: Longitude in degrees
+            target_datum: Target datum (MSL, MLLW, or LAT)
+            days: Number of days to analyze for calculation
+
+        Returns:
+            Offset in meters (added to MSL heights to get target datum heights)
+        """
+        if target_datum == TidalDatum.MSL:
+            return 0.0
+
+        # Get predictions in MSL to calculate the datum offset
+        events = self.predict_tides(lat, lon, days=days, timezone_str='UTC', datum=TidalDatum.MSL)
+
+        if not events:
+            return 0.0
+
+        from collections import defaultdict
+
+        if target_datum == TidalDatum.MLLW:
+            # MLLW: Mean Lower Low Water - average of daily lower low tides
+            daily_lows = defaultdict(list)
+            for event in events:
+                if event['type'] == 'low':
+                    day = event['datetime'][:10]
+                    daily_lows[day].append(event['height_m'])
+
+            if daily_lows:
+                lower_lows = [min(heights) for heights in daily_lows.values()]
+                mllw_level = np.mean(lower_lows)
+                # MLLW level is typically negative in MSL (e.g., -0.865m)
+                # To convert: height_MLLW = height_MSL - mllw_level
+                # If mllw_level = -0.865, then offset = -(-0.865) = +0.865
+                # So we return the negative of mllw_level to shift heights up
+                return -mllw_level
+            else:
+                return 0.0
+
+        elif target_datum == TidalDatum.LAT:
+            # LAT: Lowest Astronomical Tide - the lowest tide predicted
+            # Use minimum of all low tides over the analysis period
+            low_heights = [e['height_m'] for e in events if e['type'] == 'low']
+            if low_heights:
+                lat_level = min(low_heights)
+                # LAT is the lowest point in MSL (most negative, e.g., -1.2m)
+                # To convert: height_LAT = height_MSL - lat_level
+                # If lat_level = -1.2, then offset = -(-1.2) = +1.2
+                return -lat_level
+            else:
+                return 0.0
+
+        return 0.0
+
     def estimate_datum_offset(self, lat: float, lon: float, days: int = 30) -> float:
         """
         Estimate the offset between MSL (Mean Sea Level) and MLLW (Mean Lower Low Water).
+
+        DEPRECATED: Use datum parameter in predict_tides() or get_tide_heights() instead.
 
         This provides a reasonable datum adjustment for displaying tide heights.
         Note: Different regions use different chart datums (MLLW, LAT, CD, etc.)
@@ -822,32 +924,112 @@ class FES2022TideService:
         Returns:
             Estimated offset in meters (positive value to subtract from MSL)
         """
-        # Get a longer prediction to estimate range
-        events = self.predict_tides(lat, lon, days=days, timezone_str='UTC', datum_offset=0.0)
+        return -self._calculate_datum_offset(lat, lon, TidalDatum.MLLW, days)
 
-        if not events:
-            return 0.0
+    def get_tide_heights(
+        self,
+        lat: float,
+        lon: float,
+        days: int = 7,
+        interval_minutes: int = 30,
+        timezone_str: Optional[str] = None,
+        datum: TidalDatum = TidalDatum.MSL,
+        datum_offset: Optional[float] = None
+    ) -> List[Dict]:
+        """
+        Get tide heights at regular intervals (tide curve data).
 
-        # Group low tides by day and find the lower low for each day
-        from collections import defaultdict
-        daily_lows = defaultdict(list)
+        This returns tide height at fixed time intervals, useful for plotting
+        tide curves or understanding how the tide changes throughout the day.
 
-        for event in events:
-            if event['type'] == 'low':
-                day = event['datetime'][:10]
-                daily_lows[day].append(event['height_m'])
+        Args:
+            lat: Latitude in degrees
+            lon: Longitude in degrees
+            days: Number of days to predict (1-30)
+            interval_minutes: Time between readings (15, 30, or 60 minutes)
+            timezone_str: Timezone string (e.g., 'America/Los_Angeles') or None for auto-detect
+            datum: Tidal datum reference (MSL, MLLW, or LAT). Default is MSL.
+            datum_offset: Optional manual offset in meters (overrides datum parameter if provided).
+                         Deprecated: use datum parameter instead.
 
-        # Calculate MLLW (Mean Lower Low Water) as mean of daily lower lows
-        if daily_lows:
-            lower_lows = [min(heights) for heights in daily_lows.values()]
-            mllw = np.mean(lower_lows)
-            offset = -mllw
+        Returns:
+            List of dictionaries with keys:
+            - datetime: ISO 8601 datetime string
+            - height_m: Height in meters (relative to specified datum)
+            - height_ft: Height in feet (relative to specified datum)
+            - datum: The datum reference used for this prediction
+        """
+        # Validate interval
+        if interval_minutes not in (15, 30, 60):
+            raise ValueError("interval_minutes must be 15, 30, or 60")
+
+        # Auto-detect timezone from coordinates if not provided
+        if timezone_str is None:
+            tf = TimezoneFinder()
+            timezone_str = tf.timezone_at(lat=lat, lng=lon)
+            if timezone_str is None:
+                timezone_str = 'UTC'
+
+        try:
+            tz = ZoneInfo(timezone_str)
+        except Exception:
+            tz = ZoneInfo('UTC')
+
+        # Get current time in the specified timezone
+        now = datetime.now(tz)
+        start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Generate time array at requested intervals
+        points_per_hour = 60 // interval_minutes
+        num_points = days * 24 * points_per_hour + 1  # +1 to include end point
+        time_offsets_hours = np.linspace(0, days * 24, num_points)
+
+        # Create datetime objects for each time point
+        datetimes = [start_time + timedelta(hours=float(h)) for h in time_offsets_hours]
+
+        # Get constituent data
+        constituents_to_use = [
+            'm2', 's2', 'n2', 'k1', 'o1',
+            'k2', 'l2', 't2', '2n2', 'mu2', 'nu2',
+            'p1', 'q1', 'j1', 'oo1',
+            'm4', 'ms4', 'mn4', 'm6', 'm3',
+            'mf', 'mm', 'ssa', 'sa',
+        ]
+        constituents = {}
+
+        for const in constituents_to_use:
+            amp, phase = self.get_constituent_data(const, lat, lon)
+            if amp > 0.001:
+                constituents[const] = (amp, phase)
+
+        if not constituents:
+            raise ValueError(f"No tide data available for location ({lat}, {lon})")
+
+        # Calculate tide heights
+        heights = self._calculate_harmonic_tide_at_times(datetimes, constituents)
+
+        # Calculate and apply datum offset
+        if datum_offset is not None:
+            # Use manual offset if provided (deprecated path - keeps old behavior)
+            # Old behavior: subtract offset (e.g., datum_offset=1.0 lowers heights by 1.0m)
+            heights -= datum_offset
+            datum_used = "custom"
         else:
-            # Fallback: use mean of all lows
-            low_heights = [e['height_m'] for e in events if e['type'] == 'low']
-            if low_heights:
-                offset = -np.mean(low_heights)
-            else:
-                offset = 0.0
+            # Calculate offset based on datum parameter (new behavior)
+            offset_to_apply = self._calculate_datum_offset(lat, lon, datum, days=min(days, 30))
+            # New behavior: add offset (offsets are already sign-corrected)
+            heights += offset_to_apply
+            datum_used = datum.value
 
-        return round(offset, 3)
+        # Build result list
+        results = []
+        for i, dt in enumerate(datetimes):
+            height_m = float(heights[i])
+            results.append({
+                'datetime': dt.replace(microsecond=0).isoformat(),
+                'height_m': round(height_m, 3),
+                'height_ft': round(height_m * 3.28084, 3),
+                'datum': datum_used
+            })
+
+        return results

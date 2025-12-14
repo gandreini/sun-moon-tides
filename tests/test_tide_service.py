@@ -4,7 +4,7 @@ Unit tests for FES2022 Tide Service
 import pytest
 from datetime import datetime
 import re
-from app.tide_service import FES2022TideService
+from app.tide_service import FES2022TideService, TidalDatum
 
 
 @pytest.fixture
@@ -224,3 +224,150 @@ class TestMultipleLocations:
         for tide in tides:
             assert -10 < tide['height_m'] < 10, \
                 f"{name}: tide height {tide['height_m']}m seems unrealistic"
+
+
+class TestTideHeightsInterval:
+    """Tests for get_tide_heights interval data."""
+
+    def test_30_minute_interval_count(self, service):
+        """30-minute intervals should return correct number of readings."""
+        heights = service.get_tide_heights(lat=34.03, lon=-118.68, days=1, interval_minutes=30)
+        # 48 readings per day + 1 for end point = 49
+        assert len(heights) == 49, f"Expected 49 readings, got {len(heights)}"
+
+    def test_15_minute_interval_count(self, service):
+        """15-minute intervals should return correct number of readings."""
+        heights = service.get_tide_heights(lat=34.03, lon=-118.68, days=1, interval_minutes=15)
+        # 96 readings per day + 1 for end point = 97
+        assert len(heights) == 97, f"Expected 97 readings, got {len(heights)}"
+
+    def test_60_minute_interval_count(self, service):
+        """60-minute intervals should return correct number of readings."""
+        heights = service.get_tide_heights(lat=34.03, lon=-118.68, days=1, interval_minutes=60)
+        # 24 readings per day + 1 for end point = 25
+        assert len(heights) == 25, f"Expected 25 readings, got {len(heights)}"
+
+    def test_invalid_interval_raises_error(self, service):
+        """Invalid interval should raise ValueError."""
+        with pytest.raises(ValueError, match="interval_minutes must be 15, 30, or 60"):
+            service.get_tide_heights(lat=34.03, lon=-118.68, days=1, interval_minutes=45)
+
+    def test_height_structure(self, service):
+        """Height readings should have correct structure."""
+        heights = service.get_tide_heights(lat=34.03, lon=-118.68, days=1, interval_minutes=60)
+        for h in heights:
+            assert 'datetime' in h
+            assert 'height_m' in h
+            assert 'height_ft' in h
+
+    def test_heights_are_continuous(self, service):
+        """Height readings should show continuous tide curve (no big jumps)."""
+        heights = service.get_tide_heights(lat=34.03, lon=-118.68, days=1, interval_minutes=15)
+        for i in range(1, len(heights)):
+            diff = abs(heights[i]['height_m'] - heights[i-1]['height_m'])
+            # 15 min interval, max realistic change is ~0.5m
+            assert diff < 0.5, f"Unexpected jump of {diff}m between readings"
+
+
+class TestTidalDatum:
+    """Tests for tidal datum support."""
+
+    def test_msl_datum_is_default(self, service):
+        """MSL should be the default datum."""
+        tides = service.predict_tides(lat=34.03, lon=-118.68, days=7)
+        assert all(t['datum'] == 'msl' for t in tides)
+
+    def test_mllw_datum_increases_heights(self, service):
+        """MLLW datum should show higher values than MSL (since MLLW is below MSL)."""
+        msl_tides = service.predict_tides(lat=34.03, lon=-118.68, days=7, datum=TidalDatum.MSL)
+        mllw_tides = service.predict_tides(lat=34.03, lon=-118.68, days=7, datum=TidalDatum.MLLW)
+
+        # Compare corresponding tides (same index should be same tide event)
+        assert len(msl_tides) == len(mllw_tides)
+        for msl, mllw in zip(msl_tides, mllw_tides):
+            assert msl['type'] == mllw['type']
+            assert msl['datetime'] == mllw['datetime']
+            # MLLW heights should be higher (more positive) than MSL
+            assert mllw['height_m'] > msl['height_m']
+
+    def test_lat_datum_increases_heights_most(self, service):
+        """LAT datum should show the highest values (LAT is the lowest reference point)."""
+        msl_tides = service.predict_tides(lat=34.03, lon=-118.68, days=7, datum=TidalDatum.MSL)
+        mllw_tides = service.predict_tides(lat=34.03, lon=-118.68, days=7, datum=TidalDatum.MLLW)
+        lat_tides = service.predict_tides(lat=34.03, lon=-118.68, days=7, datum=TidalDatum.LAT)
+
+        # Compare the first low tide from each
+        msl_low = next(t for t in msl_tides if t['type'] == 'low')
+        mllw_low = next(t for t in mllw_tides if t['type'] == 'low')
+        lat_low = next(t for t in lat_tides if t['type'] == 'low')
+
+        # LAT should give highest values, then MLLW, then MSL
+        assert lat_low['height_m'] > mllw_low['height_m'] > msl_low['height_m']
+
+    def test_datum_field_in_response(self, service):
+        """All responses should include datum field."""
+        # Test predict_tides
+        tides_msl = service.predict_tides(lat=34.03, lon=-118.68, days=1, datum=TidalDatum.MSL)
+        tides_mllw = service.predict_tides(lat=34.03, lon=-118.68, days=1, datum=TidalDatum.MLLW)
+
+        assert all('datum' in t for t in tides_msl)
+        assert all(t['datum'] == 'msl' for t in tides_msl)
+        assert all(t['datum'] == 'mllw' for t in tides_mllw)
+
+        # Test get_tide_heights
+        heights_msl = service.get_tide_heights(lat=34.03, lon=-118.68, days=1, datum=TidalDatum.MSL)
+        heights_lat = service.get_tide_heights(lat=34.03, lon=-118.68, days=1, datum=TidalDatum.LAT)
+
+        assert all('datum' in h for h in heights_msl)
+        assert all(h['datum'] == 'msl' for h in heights_msl)
+        assert all(h['datum'] == 'lat' for h in heights_lat)
+
+    def test_datum_offset_backwards_compatible(self, service):
+        """Old datum_offset parameter should still work for backwards compatibility."""
+        # Manual offset of 1.0m
+        tides_offset = service.predict_tides(lat=34.03, lon=-118.68, days=7, datum_offset=1.0)
+        tides_msl = service.predict_tides(lat=34.03, lon=-118.68, days=7, datum=TidalDatum.MSL)
+
+        # With 1.0m offset, heights should be 1.0m lower than MSL
+        for t_offset, t_msl in zip(tides_offset, tides_msl):
+            assert abs((t_msl['height_m'] - 1.0) - t_offset['height_m']) < 0.01
+
+        # Should use 'custom' datum indicator
+        assert all(t['datum'] == 'custom' for t in tides_offset)
+
+    def test_same_datum_gives_consistent_results(self, service):
+        """Requesting the same datum multiple times should give identical results."""
+        tides1 = service.predict_tides(lat=34.03, lon=-118.68, days=3, datum=TidalDatum.MLLW)
+        tides2 = service.predict_tides(lat=34.03, lon=-118.68, days=3, datum=TidalDatum.MLLW)
+
+        assert len(tides1) == len(tides2)
+        for t1, t2 in zip(tides1, tides2):
+            assert t1['type'] == t2['type']
+            assert t1['datetime'] == t2['datetime']
+            assert abs(t1['height_m'] - t2['height_m']) < 0.001
+
+    def test_all_datums_preserve_tidal_range(self, service):
+        """Tidal range (difference between high and low) should be same regardless of datum."""
+        msl_tides = service.predict_tides(lat=34.03, lon=-118.68, days=3, datum=TidalDatum.MSL)
+        mllw_tides = service.predict_tides(lat=34.03, lon=-118.68, days=3, datum=TidalDatum.MLLW)
+        lat_tides = service.predict_tides(lat=34.03, lon=-118.68, days=3, datum=TidalDatum.LAT)
+
+        # Calculate tidal range for each (difference between consecutive high and low)
+        def calc_ranges(tides):
+            ranges = []
+            for i in range(1, len(tides)):
+                if tides[i-1]['type'] != tides[i]['type']:
+                    ranges.append(abs(tides[i]['height_m'] - tides[i-1]['height_m']))
+            return ranges
+
+        msl_ranges = calc_ranges(msl_tides)
+        mllw_ranges = calc_ranges(mllw_tides)
+        lat_ranges = calc_ranges(lat_tides)
+
+        # All should have same number of ranges
+        assert len(msl_ranges) == len(mllw_ranges) == len(lat_ranges)
+
+        # Tidal ranges should be identical (within 1mm)
+        for msl_r, mllw_r, lat_r in zip(msl_ranges, mllw_ranges, lat_ranges):
+            assert abs(msl_r - mllw_r) < 0.001
+            assert abs(msl_r - lat_r) < 0.001

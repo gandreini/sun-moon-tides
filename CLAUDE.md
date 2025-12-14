@@ -62,7 +62,7 @@ Environment variables to adjust test tolerances:
 **Runtime**: Python 3.11 (Docker), Python 3.8+ (local)
 
 **API Layer** (`app/main.py`):
-- FastAPI application with single POST endpoint `/api/v1/tides`
+- FastAPI application with POST endpoint `/api/v1/tides`
 - Health check at `/health`
 - Environment variable: `FES_DATA_PATH` (defaults to `/data` in Docker, `./` locally)
 
@@ -78,13 +78,22 @@ Environment variables to adjust test tolerances:
 
 ## API Usage
 
+**Get high/low tides (default):**
 ```bash
 curl -X POST http://localhost:8000/api/v1/tides \
   -H "Content-Type: application/json" \
   -d '{"lat": 45.65, "lon": 13.76, "days": 7}'
 ```
+Returns array of tide events with type (high/low), datetime, and height.
 
-Response returns array of tide events with type (high/low), datetime, and height in meters/feet.
+**Get tide curve (optional interval parameter):**
+```bash
+curl -X POST http://localhost:8000/api/v1/tides \
+  -H "Content-Type: application/json" \
+  -d '{"lat": 45.65, "lon": 13.76, "days": 3, "interval": 30}'
+```
+With `interval` (15, 30, or 60 minutes), returns height readings at regular intervals.
+Useful for plotting tide curves or calculating rate of change.
 
 ## Key Implementation Details
 

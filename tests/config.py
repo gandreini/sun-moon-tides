@@ -4,6 +4,17 @@ Test configuration for tide service comparison tests.
 These values can be overridden by environment variables.
 """
 import os
+from pathlib import Path
+
+# Load .env file if it exists (for Storm Glass API key)
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).parent.parent / '.env'
+    if env_path.exists():
+        load_dotenv(env_path)
+except ImportError:
+    # python-dotenv not installed, environment variables must be set manually
+    pass
 
 
 def _get_float_env(key: str, default: float) -> float:
@@ -50,6 +61,16 @@ RANGE_TOLERANCE_METERS = _get_float_env('TIDE_TEST_RANGE_TOLERANCE_METERS', 0.5)
 # Environment variable: TIDE_TEST_PREDICTION_DAYS
 PREDICTION_DAYS = _get_int_env('TIDE_TEST_PREDICTION_DAYS', 3)
 
-# Timeout for Surfline API requests (in seconds)
+# Timeout for API requests (in seconds)
 # Environment variable: TIDE_TEST_API_TIMEOUT
 API_TIMEOUT_SECONDS = _get_int_env('TIDE_TEST_API_TIMEOUT', 10)
+
+
+# =============================================================================
+# API Keys
+# =============================================================================
+
+# Storm Glass API Key
+# Get your API key from https://stormglass.io/
+# Environment variable: STORMGLASS_API_KEY
+STORMGLASS_API_KEY = os.environ.get('STORMGLASS_API_KEY', '')
