@@ -77,6 +77,9 @@ ocean_tide_extrapolated/
 load_tide/
 *.nc
 
+# Skyfield ephemeris data (auto-downloaded)
+*.bsp
+
 # Logs
 *.log
 
