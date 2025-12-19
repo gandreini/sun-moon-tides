@@ -22,40 +22,18 @@ from tests.config import (
     API_TIMEOUT_SECONDS,
     STORMGLASS_API_KEY,
 )
+from tests.spots import SURFLINE_SPOTS
 
 
-# Test locations with both Surfline and Storm Glass coverage
+# Convert SURFLINE_SPOTS to TEST_LOCATIONS format (with surfline_spot_id key)
 TEST_LOCATIONS = {
-    'malibu': {
-        'name': 'Malibu, CA',
-        'lat': 34.032023,
-        'lon': -118.678676,
-        'surfline_spot_id': '584204214e65fad6a7709b9f',
-    },
-    'pipeline': {
-        'name': 'Pipeline, Hawaii',
-        'lat': 21.665312,
-        'lon': -158.053881,
-        'surfline_spot_id': '5842041f4e65fad6a7708890',
-    },
-    'ocean_beach_sf': {
-        'name': 'Ocean Beach, San Francisco',
-        'lat': 37.753179,
-        'lon': -122.511891,
-        'surfline_spot_id': '638e32a4f052ba4ed06d0e3e',
-    },
-    'cocoa_beach': {
-        'name': 'Cocoa Beach, Florida',
-        'lat': 28.368170,
-        'lon': -80.600206,
-        'surfline_spot_id': '5842041f4e65fad6a7708872',
-    },
-    'fistral': {
-        'name': 'Fistral Beach, UK',
-        'lat': 50.417971,
-        'lon': -5.105062,
-        'surfline_spot_id': '584204214e65fad6a7709ced',
-    },
+    key: {
+        'name': spot['name'],
+        'lat': spot['lat'],
+        'lon': spot['lon'],
+        'surfline_spot_id': spot['spot_id'],
+    }
+    for key, spot in SURFLINE_SPOTS.items()
 }
 
 
@@ -177,71 +155,134 @@ def find_matching_tide(target: Dict, tides: List[Dict], max_time_diff_hours: flo
     return best_match
 
 
+# ANSI escape codes for terminal colors
+RED_BOLD = '\033[1;31m'
+RESET = '\033[0m'
+
+
+def format_value(value: str, is_ok: bool) -> str:
+    """Format a value with red bold if out of range."""
+    if is_ok is False:
+        return f"{RED_BOLD}{value}{RESET}"
+    return value
+
+
+def calculate_tidal_ranges(tides: List[Dict]) -> List[Dict]:
+    """Calculate tidal ranges between consecutive high/low tides.
+
+    Returns a list of dicts with the range info attached to each tide
+    (range is from previous tide to this one).
+    """
+    result = []
+    for i, tide in enumerate(tides):
+        tide_with_range = tide.copy()
+        if i > 0:
+            prev = tides[i - 1]
+            tide_with_range['range_from_prev'] = abs(tide['height_m'] - prev['height_m'])
+        else:
+            tide_with_range['range_from_prev'] = None
+        result.append(tide_with_range)
+    return result
+
+
 def create_comparison_table(our_tides: List[Dict],
                            surfline_tides: Optional[List[Dict]],
                            stormglass_tides: Optional[List[Dict]]) -> str:
-    """Create a comparison table showing all three providers side by side."""
+    """Create a comparison table showing all three providers side by side.
+
+    Compares timing and tidal range (not absolute heights, since different
+    providers use different datums like MSL vs MLLW).
+    """
+
+    # Calculate tidal ranges for each provider
+    our_tides_with_range = calculate_tidal_ranges(our_tides)
+    sf_tides_with_range = calculate_tidal_ranges(surfline_tides) if surfline_tides else None
+    sg_tides_with_range = calculate_tidal_ranges(stormglass_tides) if stormglass_tides else None
 
     table_data = []
-    headers = ['Type', 'FES2022 Time', 'FES2022 Height',
-               'Surfline Time', 'Surfline Height', 'Δ Time (min)', 'Δ Height (m)',
-               'StormGlass Time', 'StormGlass Height', 'Δ Time (min)', 'Δ Height (m)',
+    headers = ['Type', 'FES2022 Time', 'FES2022 Range',
+               'Surfline Time', 'Surfline Range', 'Δ Time (min)', 'Δ Range (m)',
+               'StormGlass Time', 'StormGlass Range', 'Δ Time (min)', 'Δ Range (m)',
                'Status']
 
-    for our_tide in our_tides:
+    for our_tide in our_tides_with_range:
+        our_range_str = f"{our_tide['range_from_prev']:.2f}m" if our_tide['range_from_prev'] else '—'
         row = [
             our_tide['type'].upper(),
             our_tide['datetime'].strftime('%m/%d %H:%M'),
-            f"{our_tide['height_m']:.2f}m",
+            our_range_str,
         ]
 
         # Surfline comparison
-        if surfline_tides:
-            sf_match = find_matching_tide(our_tide, surfline_tides)
+        sf_time_ok = None
+        sf_range_ok = None
+        if sf_tides_with_range:
+            sf_match = find_matching_tide(our_tide, sf_tides_with_range)
             if sf_match:
                 time_diff = (sf_match['datetime'] - our_tide['datetime']).total_seconds() / 60
-                height_diff = sf_match['height_m'] - our_tide['height_m']
+                sf_range_str = f"{sf_match['range_from_prev']:.2f}m" if sf_match['range_from_prev'] else '—'
+
+                sf_time_ok = abs(time_diff) <= TIME_TOLERANCE_MINUTES
+                time_diff_str = format_value(f"{time_diff:+.0f}", sf_time_ok)
 
                 row.extend([
                     sf_match['datetime'].strftime('%m/%d %H:%M'),
-                    f"{sf_match['height_m']:.2f}m",
-                    f"{time_diff:+.0f}",
-                    f"{height_diff:+.2f}",
+                    sf_range_str,
+                    time_diff_str,
                 ])
 
-                sf_time_ok = abs(time_diff) <= TIME_TOLERANCE_MINUTES
+                # Compare tidal ranges (only if both have range data)
+                if our_tide['range_from_prev'] is not None and sf_match['range_from_prev'] is not None:
+                    range_diff = sf_match['range_from_prev'] - our_tide['range_from_prev']
+                    sf_range_ok = abs(range_diff) <= RANGE_TOLERANCE_METERS
+                    row.append(format_value(f"{range_diff:+.2f}", sf_range_ok))
+                else:
+                    row.append('—')
             else:
                 row.extend(['—', '—', '—', '—'])
-                sf_time_ok = None
         else:
             row.extend(['N/A', 'N/A', 'N/A', 'N/A'])
-            sf_time_ok = None
 
         # Storm Glass comparison
-        if stormglass_tides:
-            sg_match = find_matching_tide(our_tide, stormglass_tides)
+        sg_time_ok = None
+        sg_range_ok = None
+        if sg_tides_with_range:
+            sg_match = find_matching_tide(our_tide, sg_tides_with_range)
             if sg_match:
                 time_diff = (sg_match['datetime'] - our_tide['datetime']).total_seconds() / 60
-                height_diff = sg_match['height_m'] - our_tide['height_m']
+                sg_range_str = f"{sg_match['range_from_prev']:.2f}m" if sg_match['range_from_prev'] else '—'
+
+                sg_time_ok = abs(time_diff) <= TIME_TOLERANCE_MINUTES
+                time_diff_str = format_value(f"{time_diff:+.0f}", sg_time_ok)
 
                 row.extend([
                     sg_match['datetime'].strftime('%m/%d %H:%M'),
-                    f"{sg_match['height_m']:.2f}m",
-                    f"{time_diff:+.0f}",
-                    f"{height_diff:+.2f}",
+                    sg_range_str,
+                    time_diff_str,
                 ])
 
-                sg_time_ok = abs(time_diff) <= TIME_TOLERANCE_MINUTES
+                # Compare tidal ranges (only if both have range data)
+                if our_tide['range_from_prev'] is not None and sg_match['range_from_prev'] is not None:
+                    range_diff = sg_match['range_from_prev'] - our_tide['range_from_prev']
+                    sg_range_ok = abs(range_diff) <= RANGE_TOLERANCE_METERS
+                    row.append(format_value(f"{range_diff:+.2f}", sg_range_ok))
+                else:
+                    row.append('—')
             else:
                 row.extend(['—', '—', '—', '—'])
-                sg_time_ok = None
         else:
             row.extend(['N/A', 'N/A', 'N/A', 'N/A'])
-            sg_time_ok = None
 
-        # Status indicator
-        if sf_time_ok is False or sg_time_ok is False:
-            status = '⚠️ OUT OF RANGE'
+        # Status indicator - be specific about what's out of range
+        time_issue = sf_time_ok is False or sg_time_ok is False
+        range_issue = sf_range_ok is False or sg_range_ok is False
+
+        if time_issue and range_issue:
+            status = f'{RED_BOLD}⚠️ TIME+RANGE{RESET}'
+        elif time_issue:
+            status = f'{RED_BOLD}⚠️ TIME{RESET}'
+        elif range_issue:
+            status = f'{RED_BOLD}⚠️ RANGE{RESET}'
         elif sf_time_ok is None and sg_time_ok is None:
             status = '—'
         else:
@@ -253,6 +294,7 @@ def create_comparison_table(our_tides: List[Dict],
     return tabulate(table_data, headers=headers, tablefmt='grid')
 
 
+@pytest.mark.comparison
 class TestProviderComparison:
     """Compare our predictions against Surfline and Storm Glass."""
 

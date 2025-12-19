@@ -8,7 +8,13 @@
       "Bash(source:*)",
       "Bash(python -m pytest:*)",
       "Bash(git -C /Users/giulioandreini/Desktop/Lavoro/tide-app log --oneline --all)",
-      "Bash(git -C /Users/giulioandreini/Desktop/Lavoro/tide-app show:*)"
+      "Bash(git -C /Users/giulioandreini/Desktop/Lavoro/tide-app show:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(cat:*)",
+      "Bash(pytest:*)"
     ]
   }
 }

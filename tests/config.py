@@ -50,7 +50,7 @@ TIME_TOLERANCE_MINUTES = _get_float_env('TIDE_TEST_TIME_TOLERANCE_MINUTES', 30.0
 # Maximum tidal range difference allowed (in meters)
 # Compares the height difference between consecutive high/low tides
 # Environment variable: TIDE_TEST_RANGE_TOLERANCE_METERS
-RANGE_TOLERANCE_METERS = _get_float_env('TIDE_TEST_RANGE_TOLERANCE_METERS', 0.5)
+RANGE_TOLERANCE_METERS = _get_float_env('TIDE_TEST_RANGE_TOLERANCE_METERS', 0.3)
 
 
 # =============================================================================

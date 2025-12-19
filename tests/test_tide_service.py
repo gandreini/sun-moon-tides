@@ -133,6 +133,7 @@ class TestTidePrediction:
             assert abs(tide['height_ft'] - expected_ft) < 0.01, \
                 "Feet conversion should be accurate"
 
+    @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_no_data_raises_error(self, service):
         """Should raise error for location with no data (land)."""
         # Middle of Sahara desert - should have no ocean tide data

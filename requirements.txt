@@ -8,3 +8,4 @@ timezonefinder==6.5.2
 pytest==8.4.2
 tabulate==0.9.0
 python-dotenv==1.0.0
+skyfield==1.46.0
