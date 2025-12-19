@@ -135,14 +135,132 @@ class TestCombinedCalculations:
     """Tests for combined astronomy calculations."""
 
     def test_get_all_astronomical_info(self, service):
-        """Should return both sun and moon data."""
+        """Should return merged sun and moon data per day."""
         lat, lon = 34.05, -118.24
         date = datetime(2023, 6, 21, tzinfo=timezone.utc)
         days = 2
 
         result = service.get_all_astronomical_info(lat, lon, date, days)
 
-        assert "sun_events" in result, "Result should contain sun_events"
-        assert "moon_events" in result, "Result should contain moon_events"
-        assert len(result["sun_events"]) == days
-        assert len(result["moon_events"]) == days
+        assert isinstance(result, list), "Result should be a list"
+        assert len(result) == days, f"Should return {days} days"
+
+        # Check first day has all expected fields
+        day = result[0]
+        assert "date" in day
+        assert "civil_dawn" in day
+        assert "sunrise" in day
+        assert "solar_noon" in day
+        assert "sunset" in day
+        assert "civil_dusk" in day
+        assert "moonrise" in day
+        assert "moonset" in day
+        assert "moon_phase" in day
+        assert "moon_phase_angle" in day
+        assert "moon_illumination" in day
+
+
+class TestTimezoneHandling:
+    """Tests for timezone auto-detection and formatting."""
+
+    def test_sun_events_use_local_timezone_los_angeles(self, service):
+        """Sun events should return times in local timezone (Pacific for LA)."""
+        lat, lon = 34.05, -118.24  # Los Angeles
+        date = datetime(2023, 6, 21, tzinfo=timezone.utc)
+
+        events = service.get_sun_events(lat, lon, date)
+        day_events = events[0]
+
+        # LA is in Pacific timezone (-07:00 in summer, -08:00 in winter)
+        # June should be PDT (-07:00)
+        sunrise = day_events["sunrise"]
+        assert sunrise is not None
+        assert "-07:00" in sunrise or "-08:00" in sunrise, \
+            f"LA sunrise should have Pacific timezone offset, got: {sunrise}"
+
+    def test_sun_events_use_local_timezone_rome(self, service):
+        """Sun events should return times in local timezone (CET for Rome)."""
+        lat, lon = 41.9, 12.5  # Rome, Italy
+        date = datetime(2023, 6, 21, tzinfo=timezone.utc)
+
+        events = service.get_sun_events(lat, lon, date)
+        day_events = events[0]
+
+        # Rome is in CET/CEST (+01:00 winter, +02:00 summer)
+        # June should be CEST (+02:00)
+        sunrise = day_events["sunrise"]
+        assert sunrise is not None
+        assert "+01:00" in sunrise or "+02:00" in sunrise, \
+            f"Rome sunrise should have CET/CEST timezone offset, got: {sunrise}"
+
+    def test_moon_events_use_local_timezone(self, service):
+        """Moon events should return times in local timezone."""
+        lat, lon = 34.05, -118.24  # Los Angeles
+        date = datetime(2023, 6, 21, tzinfo=timezone.utc)
+
+        events = service.get_moon_events(lat, lon, date)
+        day_events = events[0]
+
+        # Check moonrise or moonset (one might be None depending on the day)
+        moonrise = day_events.get("moonrise")
+        moonset = day_events.get("moonset")
+
+        # At least one should be present with local timezone
+        moon_time = moonrise or moonset
+        if moon_time:
+            assert "-07:00" in moon_time or "-08:00" in moon_time, \
+                f"LA moon event should have Pacific timezone offset, got: {moon_time}"
+
+    def test_explicit_timezone_override(self, service):
+        """Explicit timezone_str should override auto-detection."""
+        lat, lon = 34.05, -118.24  # Los Angeles
+        date = datetime(2023, 6, 21, tzinfo=timezone.utc)
+
+        # Request Tokyo timezone for LA coordinates
+        events = service.get_sun_events(lat, lon, date, timezone_str="Asia/Tokyo")
+        day_events = events[0]
+
+        sunrise = day_events["sunrise"]
+        assert sunrise is not None
+        assert "+09:00" in sunrise, \
+            f"Should use explicit Tokyo timezone (+09:00), got: {sunrise}"
+
+    def test_all_astronomical_info_uses_local_timezone(self, service):
+        """Combined endpoint should return local timezone for both sun and moon."""
+        lat, lon = 51.5, -0.12  # London
+        date = datetime(2023, 6, 21, tzinfo=timezone.utc)
+
+        result = service.get_all_astronomical_info(lat, lon, date)
+
+        # London is BST (+01:00) in summer
+        day = result[0]
+
+        sunrise = day["sunrise"]
+        assert sunrise is not None
+        assert "+00:00" in sunrise or "+01:00" in sunrise, \
+            f"London sunrise should have GMT/BST offset, got: {sunrise}"
+
+        # Check moon event if available
+        moon_time = day.get("moonrise") or day.get("moonset")
+        if moon_time:
+            assert "+00:00" in moon_time or "+01:00" in moon_time, \
+                f"London moon event should have GMT/BST offset, got: {moon_time}"
+
+    def test_times_not_in_utc(self, service):
+        """Times should NOT be in UTC (+00:00) for non-UTC locations."""
+        # Test multiple locations that are definitely not in UTC
+        test_locations = [
+            (34.05, -118.24, "Los Angeles"),  # Pacific
+            (35.68, 139.69, "Tokyo"),  # JST +09:00
+            (-33.87, 151.21, "Sydney"),  # AEST +10:00/+11:00
+        ]
+
+        date = datetime(2023, 6, 21, tzinfo=timezone.utc)
+
+        for lat, lon, name in test_locations:
+            events = service.get_sun_events(lat, lon, date)
+            sunrise = events[0]["sunrise"]
+
+            assert sunrise is not None, f"{name} should have sunrise"
+            assert "+00:00" not in sunrise, \
+                f"{name} should NOT be in UTC, got: {sunrise}"

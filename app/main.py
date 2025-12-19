@@ -1,18 +1,16 @@
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Literal, Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Query
 
 from .astronomy_service import AstronomyService
 from .tide_service import FES2022TideService, TidalDatum
 
 app = FastAPI(
-    title="Mondo Surf Tide & Astronomy API",
-    description="FES2022-powered tide predictions with astronomical data",
-    version="1.1.0",
+    title="Sun Moon Tides API",
+    description="Worldwide tide predictions and astronomy data using FES2022",
+    version="2.0.0",
 )
 
 # Initialize services
@@ -22,44 +20,22 @@ tide_service = FES2022TideService(data_path=DATA_PATH)
 astronomy_service = AstronomyService()
 
 
-class TideRequest(BaseModel):
-    lat: float = Field(..., ge=-90, le=90, description="Latitude in degrees")
-    lon: float = Field(..., ge=-180, le=180, description="Longitude in degrees")
-    days: int = Field(14, ge=1, le=30, description="Number of days to predict")
-    interval: Optional[Literal[15, 30, 60]] = Field(
+
+
+@app.get("/api/v1/tides")
+async def get_tides(
+    lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
+    lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
+    days: int = Query(7, ge=1, le=30, description="Number of days to predict"),
+    interval: Optional[Literal["15", "30", "60"]] = Query(
         None,
         description="Optional interval in minutes (15, 30, or 60). If not provided, returns only high/low tides.",
-    )
-    datum: Optional[Literal["msl", "mllw", "lat"]] = Field(
+    ),
+    datum: Literal["msl", "mllw", "lat"] = Query(
         "msl",
-        description="Tidal datum reference: 'msl' (Mean Sea Level, default), 'mllw' (Mean Lower Low Water), or 'lat' (Lowest Astronomical Tide)",
-    )
-
-
-class TideEvent(BaseModel):
-    """High/low tide event"""
-
-    type: Literal["high", "low"]
-    datetime: str
-    height_m: float
-    height_ft: float
-    datum: str
-
-
-class TideHeight(BaseModel):
-    """Tide height at a point in time"""
-
-    datetime: str
-    height_m: float
-    height_ft: float
-    datum: str
-    type: Optional[Literal["high", "low"]] = Field(
-        None, exclude_if_none=True
-    )  # Only present for high/low tide events
-
-
-@app.post("/api/v1/tides", response_model=None)
-async def get_tides(request: TideRequest):
+        description="Tidal datum reference: 'msl' (Mean Sea Level), 'mllw' (Mean Lower Low Water), or 'lat' (Lowest Astronomical Tide)",
+    ),
+):
     """
     Get tide predictions for a location.
 
@@ -77,28 +53,25 @@ async def get_tides(request: TideRequest):
     """
     try:
         # Convert datum string to enum
-        datum_enum = TidalDatum(request.datum)
+        datum_enum = TidalDatum(datum)
 
-        if request.interval is None:
+        if interval is None:
             # Return high/low tide events only
-            tides = tide_service.predict_tides(
-                request.lat, request.lon, request.days, datum=datum_enum
-            )
+            tides = tide_service.predict_tides(lat, lon, days, datum=datum_enum)
             return tides
         else:
             # Return tide heights at regular intervals, with high/low events inserted at exact times
+            interval_int = int(interval)
             heights = tide_service.get_tide_heights(
-                lat=request.lat,
-                lon=request.lon,
-                days=request.days,
-                interval_minutes=request.interval,
+                lat=lat,
+                lon=lon,
+                days=days,
+                interval_minutes=interval_int,
                 datum=datum_enum,
             )
 
             # Also get high/low tide events to insert at their exact times
-            events = tide_service.predict_tides(
-                request.lat, request.lon, request.days, datum=datum_enum
-            )
+            events = tide_service.predict_tides(lat, lon, days, datum=datum_enum)
 
             # Combine heights and events, then sort by datetime
             combined = []
@@ -144,56 +117,33 @@ async def get_tides(request: TideRequest):
         raise HTTPException(500, detail=str(e))
 
 
-class AstronomyRequest(BaseModel):
-    """Request model for astronomy data."""
-
-    lat: float = Field(..., ge=-90, le=90, description="Latitude in degrees")
-    lon: float = Field(..., ge=-180, le=180, description="Longitude in degrees")
-    days: int = Field(1, ge=1, le=30, description="Number of days to predict (1-30)")
-    date: Optional[str] = Field(
+@app.get("/api/v1/sun-moon")
+async def get_sun_moon(
+    lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
+    lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
+    days: int = Query(7, ge=1, le=30, description="Number of days to predict (1-30)"),
+    date: Optional[str] = Query(
         None,
         description="Optional start date (YYYY-MM-DD). If not provided, current date is used.",
-    )
-
-
-class CombinedRequest(BaseModel):
-    """Request model for combined tide and astronomy data."""
-
-    lat: float = Field(..., ge=-90, le=90, description="Latitude in degrees")
-    lon: float = Field(..., ge=-180, le=180, description="Longitude in degrees")
-    days: int = Field(7, ge=1, le=30, description="Number of days to predict (1-30)")
-    date: Optional[str] = Field(
-        None,
-        description="Optional start date (YYYY-MM-DD). If not provided, current date is used.",
-    )
-    interval: Optional[Literal[15, 30, 60]] = Field(
-        None,
-        description="Optional interval in minutes for tide heights. If not provided, returns only high/low tides.",
-    )
-    datum: Optional[Literal["msl", "mllw", "lat"]] = Field(
-        "msl",
-        description="Tidal datum reference: 'msl' (Mean Sea Level, default), 'mllw' (Mean Lower Low Water), or 'lat' (Lowest Astronomical Tide)",
-    )
-
-
-@app.post("/api/v1/astronomy")
-async def get_astronomy(request: AstronomyRequest):
+    ),
+):
     """
-    Get astronomical information for a location.
+    Get sun and moon information for a location.
 
-    Provides sun and moon data including:
+    Provides daily data including:
+    - Civil dawn/dusk times
     - Sunrise/sunset times
     - Solar noon
     - Moonrise/moonset times
     - Moon phase information
 
-    All times are returned in ISO 8601 format with UTC timezone.
+    All times are returned in ISO 8601 format with local timezone.
     """
     try:
         # Parse date or use current date
-        if request.date:
+        if date:
             try:
-                start_date = datetime.fromisoformat(request.date)
+                start_date = datetime.fromisoformat(date)
                 # If no timezone provided, assume UTC
                 if start_date.tzinfo is None:
                     start_date = start_date.replace(tzinfo=timezone.utc)
@@ -207,7 +157,7 @@ async def get_astronomy(request: AstronomyRequest):
 
         # Get astronomical data
         astronomy_data = astronomy_service.get_all_astronomical_info(
-            request.lat, request.lon, start_date, request.days
+            lat, lon, start_date, days
         )
 
         return astronomy_data
@@ -215,24 +165,39 @@ async def get_astronomy(request: AstronomyRequest):
         raise HTTPException(500, detail=str(e))
 
 
-@app.post("/api/v1/combined")
-async def get_combined_data(request: CombinedRequest):
+@app.get("/api/v1/sun-moon-tides")
+async def get_sun_moon_tides(
+    lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
+    lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
+    days: int = Query(7, ge=1, le=30, description="Number of days to predict (1-30)"),
+    date: Optional[str] = Query(
+        None,
+        description="Optional start date (YYYY-MM-DD). If not provided, current date is used.",
+    ),
+    interval: Optional[Literal["15", "30", "60"]] = Query(
+        None,
+        description="Optional interval in minutes for tide heights. If not provided, returns only high/low tides.",
+    ),
+    datum: Literal["msl", "mllw", "lat"] = Query(
+        "msl",
+        description="Tidal datum reference: 'msl' (Mean Sea Level), 'mllw' (Mean Lower Low Water), or 'lat' (Lowest Astronomical Tide)",
+    ),
+):
     """
-    Get combined tide and astronomy data for a location.
+    Get combined tide and sun/moon data for a location.
 
-    Returns both tide predictions and astronomical information (sun and moon data)
-    in a single response.
+    Returns both tide predictions and astronomical information in a single response.
 
     Tide data includes high/low tide events or regular interval heights if requested.
-    Astronomy data includes sunrise/sunset and moon phase information.
+    Sun/moon data includes sunrise/sunset and moon phase information.
 
-    All times are returned in ISO 8601 format with appropriate timezone.
+    All times are returned in ISO 8601 format with local timezone.
     """
     try:
         # Parse date or use current date
-        if request.date:
+        if date:
             try:
-                start_date = datetime.fromisoformat(request.date)
+                start_date = datetime.fromisoformat(date)
                 # If no timezone provided, assume UTC
                 if start_date.tzinfo is None:
                     start_date = start_date.replace(tzinfo=timezone.utc)
@@ -245,31 +210,30 @@ async def get_combined_data(request: CombinedRequest):
             start_date = datetime.now(timezone.utc)
 
         # Convert datum string to enum
-        datum_enum = TidalDatum(request.datum)
+        datum_enum = TidalDatum(datum)
 
         # Get tide data
-        if request.interval is None:
+        if interval is None:
             # Return high/low tide events only
-            tides = tide_service.predict_tides(
-                request.lat, request.lon, request.days, datum=datum_enum
-            )
+            tides = tide_service.predict_tides(lat, lon, days, datum=datum_enum)
         else:
             # Return tide heights at regular intervals
+            interval_int = int(interval)
             tides = tide_service.get_tide_heights(
-                lat=request.lat,
-                lon=request.lon,
-                days=request.days,
-                interval_minutes=request.interval,
+                lat=lat,
+                lon=lon,
+                days=days,
+                interval_minutes=interval_int,
                 datum=datum_enum,
             )
 
         # Get astronomy data
         astronomy_data = astronomy_service.get_all_astronomical_info(
-            request.lat, request.lon, start_date, request.days
+            lat, lon, start_date, days
         )
 
         # Combine and return
-        return {"tides": tides, "astronomy": astronomy_data}
+        return {"sun_moon": astronomy_data, "tides": tides}
 
     except Exception as e:
         raise HTTPException(500, detail=str(e))

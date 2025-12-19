@@ -1,6 +1,8 @@
-# FES2022 Tide & Astronomy Service
+# Sun Moon Tides
 
 Worldwide tide predictions and astronomy data (sunrise/sunset, moon phases) using the FES2022 ocean tide model.
+
+**Website:** https://sunmoontides.com
 
 ## Quick Start
 
@@ -16,23 +18,17 @@ API docs at http://localhost:8000/docs
 
 **Tides** - Get high/low tide times:
 ```bash
-curl -X POST http://localhost:8000/api/v1/tides \
-  -H "Content-Type: application/json" \
-  -d '{"lat": 34.03, "lon": -118.68, "days": 7}'
+curl "http://localhost:8000/api/v1/tides?lat=34.03&lon=-118.68&days=7"
 ```
 
-**Astronomy** - Get sun/moon events:
+**Sun & Moon** - Get sunrise/sunset, moon phases:
 ```bash
-curl -X POST http://localhost:8000/api/v1/astronomy \
-  -H "Content-Type: application/json" \
-  -d '{"lat": 34.03, "lon": -118.68, "days": 3}'
+curl "http://localhost:8000/api/v1/sun-moon?lat=34.03&lon=-118.68&days=3"
 ```
 
 **Combined** - Both in one call:
 ```bash
-curl -X POST http://localhost:8000/api/v1/combined \
-  -H "Content-Type: application/json" \
-  -d '{"lat": 34.03, "lon": -118.68, "days": 3}'
+curl "http://localhost:8000/api/v1/sun-moon-tides?lat=34.03&lon=-118.68&days=7"
 ```
 
 ## Python Usage

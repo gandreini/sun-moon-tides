@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a FastAPI-based tide prediction service using the FES2022 (Finite Element Solution) global ocean tide model. It provides REST API endpoints for surf spot tide predictions.
+**Sun Moon Tides** (sunmoontides.com) - A FastAPI-based service providing worldwide tide predictions and astronomy data using the FES2022 ocean tide model.
 
 ## Development Commands
 
@@ -78,8 +78,11 @@ Environment variables to adjust test tolerances:
 **Runtime**: Python 3.11 (Docker), Python 3.8+ (local)
 
 **API Layer** (`app/main.py`):
-- FastAPI application with POST endpoint `/api/v1/tides`
-- Health check at `/health`
+- FastAPI application with REST endpoints:
+  - `GET /api/v1/tides` - Tide predictions
+  - `GET /api/v1/sun-moon` - Sun/moon events
+  - `GET /api/v1/sun-moon-tides` - Combined data
+  - `GET /health` - Health check
 - Environment variable: `FES_DATA_PATH` (defaults to `/data` in Docker, `./` locally)
 
 **Tide Service** (`app/tide_service.py`):
@@ -101,22 +104,29 @@ Environment variables to adjust test tolerances:
 
 ## API Usage
 
-**Get high/low tides (default):**
+**Get high/low tides:**
 ```bash
-curl -X POST http://localhost:8000/api/v1/tides \
-  -H "Content-Type: application/json" \
-  -d '{"lat": 45.65, "lon": 13.76, "days": 7}'
+curl "http://localhost:8000/api/v1/tides?lat=45.65&lon=13.76&days=7"
 ```
 Returns array of tide events with type (high/low), datetime, and height.
 
-**Get tide curve (optional interval parameter):**
+**Get tide curve (with interval):**
 ```bash
-curl -X POST http://localhost:8000/api/v1/tides \
-  -H "Content-Type: application/json" \
-  -d '{"lat": 45.65, "lon": 13.76, "days": 3, "interval": 30}'
+curl "http://localhost:8000/api/v1/tides?lat=45.65&lon=13.76&days=3&interval=30"
 ```
 With `interval` (15, 30, or 60 minutes), returns height readings at regular intervals.
-Useful for plotting tide curves or calculating rate of change.
+
+**Get sun/moon data:**
+```bash
+curl "http://localhost:8000/api/v1/sun-moon?lat=45.65&lon=13.76&days=3"
+```
+Returns daily sunrise/sunset, moonrise/moonset, and moon phase.
+
+**Get combined data:**
+```bash
+curl "http://localhost:8000/api/v1/sun-moon-tides?lat=45.65&lon=13.76&days=7"
+```
+Returns both tides and sun/moon data in a single response.
 
 ## Key Implementation Details
 

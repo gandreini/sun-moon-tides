@@ -11,15 +11,17 @@ This module provides functions for calculating:
 - Moon rise/set times
 
 All calculations require latitude, longitude, and date.
+All times are returned in the local timezone (auto-detected from coordinates).
 """
 
-import math
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from skyfield import almanac
 from skyfield.api import load, wgs84
 from skyfield.timelib import Time
+from timezonefinder import TimezoneFinder
 
 
 class AstronomyService:
@@ -35,6 +37,21 @@ class AstronomyService:
         self.sun = self.eph["sun"]
         self.earth = self.eph["earth"]
         self.moon = self.eph["moon"]
+
+        # Timezone finder for auto-detection
+        self._tf = TimezoneFinder()
+
+    def _get_timezone(self, lat: float, lon: float, timezone_str: Optional[str] = None) -> ZoneInfo:
+        """Get timezone for coordinates, auto-detecting if not provided."""
+        if timezone_str is None:
+            timezone_str = self._tf.timezone_at(lat=lat, lng=lon)
+            if timezone_str is None:
+                timezone_str = 'UTC'
+
+        try:
+            return ZoneInfo(timezone_str)
+        except Exception:
+            return ZoneInfo('UTC')
 
     def _get_time_range(self, date: datetime, days: int = 1) -> Tuple[Time, Time]:
         """
@@ -84,8 +101,16 @@ class AstronomyService:
         # Return the function
         return is_sun_up
 
+    def _format_time(self, skyfield_time, tz: ZoneInfo) -> str:
+        """Format a Skyfield time to ISO 8601 string in the given timezone."""
+        dt = skyfield_time.astimezone(tz)
+        # Remove microseconds for cleaner output
+        dt = dt.replace(microsecond=0)
+        return dt.isoformat()
+
     def get_sun_events(
-        self, lat: float, lon: float, date: datetime, days: int = 1
+        self, lat: float, lon: float, date: datetime, days: int = 1,
+        timezone_str: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Calculate sun events for the given location and date range.
@@ -95,11 +120,13 @@ class AstronomyService:
             lon: Longitude in degrees
             date: Starting date
             days: Number of days to calculate (default: 1)
+            timezone_str: Timezone string (e.g., 'America/Los_Angeles') or None for auto-detect
 
         Returns:
             List of dictionaries containing sun events for each day
         """
         t0, t1 = self._get_time_range(date, days)
+        tz = self._get_timezone(lat, lon, timezone_str)
 
         # Create location object
         location = wgs84.latlon(lat, lon)
@@ -147,9 +174,9 @@ class AstronomyService:
             # Process sunrise/sunset
             for time, event in zip(times, events):
                 if event == 1:  # Sunrise
-                    day_result["sunrise"] = time.astimezone(timezone.utc).isoformat()
+                    day_result["sunrise"] = self._format_time(time, tz)
                 else:  # Sunset
-                    day_result["sunset"] = time.astimezone(timezone.utc).isoformat()
+                    day_result["sunset"] = self._format_time(time, tz)
 
             # Process civil dawn/dusk
             dawn_found = False
@@ -157,21 +184,18 @@ class AstronomyService:
 
             for time, event in zip(civil_times, civil_events):
                 if event and not dawn_found:  # Civil dawn (night to day)
-                    day_result["civil_dawn"] = time.astimezone(timezone.utc).isoformat()
+                    day_result["civil_dawn"] = self._format_time(time, tz)
                     dawn_found = True
                 elif not event and not dusk_found:  # Civil dusk (day to night)
-                    day_result["civil_dusk"] = time.astimezone(timezone.utc).isoformat()
+                    day_result["civil_dusk"] = self._format_time(time, tz)
                     dusk_found = True
 
             # Calculate solar noon
             if day_result["sunrise"] and day_result["sunset"]:
-                sunrise_dt = datetime.fromisoformat(
-                    day_result["sunrise"].replace("Z", "+00:00")
-                )
-                sunset_dt = datetime.fromisoformat(
-                    day_result["sunset"].replace("Z", "+00:00")
-                )
+                sunrise_dt = datetime.fromisoformat(day_result["sunrise"])
+                sunset_dt = datetime.fromisoformat(day_result["sunset"])
                 noon = sunrise_dt + (sunset_dt - sunrise_dt) / 2
+                noon = noon.replace(microsecond=0)
                 day_result["solar_noon"] = noon.isoformat()
 
             sun_events.append(day_result)
@@ -179,7 +203,8 @@ class AstronomyService:
         return sun_events
 
     def get_moon_events(
-        self, lat: float, lon: float, date: datetime, days: int = 1
+        self, lat: float, lon: float, date: datetime, days: int = 1,
+        timezone_str: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Calculate moon events for the given location and date range.
@@ -189,11 +214,13 @@ class AstronomyService:
             lon: Longitude in degrees
             date: Starting date
             days: Number of days to calculate (default: 1)
+            timezone_str: Timezone string (e.g., 'America/Los_Angeles') or None for auto-detect
 
         Returns:
             List of dictionaries containing moon events for each day
         """
         t0, t1 = self._get_time_range(date, days)
+        tz = self._get_timezone(lat, lon, timezone_str)
 
         # Create location object
         location = wgs84.latlon(lat, lon)
@@ -239,9 +266,9 @@ class AstronomyService:
             # Process moonrise/moonset
             for time, event in zip(moon_times, moon_events_list):
                 if event == 1:  # Moonrise
-                    day_result["moonrise"] = time.astimezone(timezone.utc).isoformat()
+                    day_result["moonrise"] = self._format_time(time, tz)
                 else:  # Moonset
-                    day_result["moonset"] = time.astimezone(timezone.utc).isoformat()
+                    day_result["moonset"] = self._format_time(time, tz)
 
             moon_events.append(day_result)
 
@@ -301,8 +328,9 @@ class AstronomyService:
             return round(((360 - angle) / 180) * 100)
 
     def get_all_astronomical_info(
-        self, lat: float, lon: float, date: datetime, days: int = 1
-    ) -> Dict[str, Any]:
+        self, lat: float, lon: float, date: datetime, days: int = 1,
+        timezone_str: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
         Get all astronomical information for a location and date range.
 
@@ -311,11 +339,29 @@ class AstronomyService:
             lon: Longitude in degrees
             date: Starting date
             days: Number of days to calculate (default: 1)
+            timezone_str: Timezone string (e.g., 'America/Los_Angeles') or None for auto-detect
 
         Returns:
-            Dictionary with sun and moon events
+            List of dictionaries, one per day, with merged sun and moon events
         """
-        return {
-            "sun_events": self.get_sun_events(lat, lon, date, days),
-            "moon_events": self.get_moon_events(lat, lon, date, days),
-        }
+        sun_events = self.get_sun_events(lat, lon, date, days, timezone_str)
+        moon_events = self.get_moon_events(lat, lon, date, days, timezone_str)
+
+        # Merge sun and moon events by day
+        merged = []
+        for sun, moon in zip(sun_events, moon_events):
+            merged.append({
+                "date": sun["date"],
+                "civil_dawn": sun["civil_dawn"],
+                "sunrise": sun["sunrise"],
+                "solar_noon": sun["solar_noon"],
+                "sunset": sun["sunset"],
+                "civil_dusk": sun["civil_dusk"],
+                "moonrise": moon["moonrise"],
+                "moonset": moon["moonset"],
+                "moon_phase": moon["phase"],
+                "moon_phase_angle": moon["phase_angle"],
+                "moon_illumination": moon["illumination"],
+            })
+
+        return merged
