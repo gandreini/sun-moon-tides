@@ -259,11 +259,35 @@ async def get_comparison(
     - Storm Glass (requires API key, global coverage)
 
     Compares 17 global surf spots across 6 continents.
+    Uses progressive loading to avoid memory/timeout issues.
     """
-    from .comparison import generate_comparison_html
+    from .comparison import generate_comparison_shell_html
+
+    html = generate_comparison_shell_html(days)
+    return HTMLResponse(content=html)
+
+
+@app.get("/api/v1/comparison/location/{location_key}")
+async def get_location_comparison(
+    location_key: str,
+    days: int = Query(3, ge=1, le=7, description="Number of days to compare (1-7)"),
+):
+    """
+    Get comparison data for a single location.
+
+    Returns HTML fragment showing tide comparison for one location.
+    Used by the progressive loading comparison page.
+    """
+    import traceback
+    from .comparison import generate_single_location_html
 
     try:
-        html = generate_comparison_html(None, days)
+        html = generate_single_location_html(location_key, days)
         return HTMLResponse(content=html)
     except Exception as e:
-        raise HTTPException(500, detail=str(e))
+        error_msg = f"Error for {location_key}: {str(e)}"
+        # Return error HTML fragment
+        return HTMLResponse(
+            content=f'<div class="location-section" style="background: #fee; padding: 20px; margin: 20px 0; border-radius: 8px;"><h2>Error loading {location_key}</h2><pre>{error_msg}</pre></div>',
+            status_code=500
+        )
