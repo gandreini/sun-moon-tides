@@ -15,7 +15,12 @@
       "Bash(wc:*)",
       "Bash(cat:*)",
       "Bash(pytest:*)",
-      "Bash(python -c:*)"
+      "Bash(python -c:*)",
+      "Bash(deactivate)",
+      "Bash(python -m uvicorn:*)",
+      "Bash(curl:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill -9)"
     ]
   }
 }

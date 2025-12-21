@@ -31,6 +31,12 @@ curl "http://localhost:8000/api/v1/sun-moon?lat=34.03&lon=-118.68&days=3"
 curl "http://localhost:8000/api/v1/sun-moon-tides?lat=34.03&lon=-118.68&days=7"
 ```
 
+**Comparison** - Compare FES2022 predictions against other providers:
+```bash
+open http://localhost:8000/api/v1/comparison
+```
+View HTML report comparing FES2022 against NOAA, WorldTides, and StormGlass for 17 global test locations.
+
 ## Python Usage
 
 ```python
@@ -49,17 +55,22 @@ for tide in tides:
 # Unit tests (fast, no internet)
 pytest tests/ -v -m "not comparison"
 
-# Comparison tests (vs Surfline/Storm Glass)
+# Comparison tests (vs NOAA/WorldTides/StormGlass)
 pytest tests/ -v -s -m comparison
 
 # All tests
 pytest tests/ -v
 ```
 
-For Storm Glass comparisons, add your API key to `.env`:
+For provider comparisons, add API keys to `.env`:
 ```
+WORLDTIDES_API_KEY=your_key_here
 STORMGLASS_API_KEY=your_key_here
 ```
+
+NOAA CO-OPS works without API key (US locations only).
+
+**Web-based comparison**: View live HTML comparison at http://localhost:8000/api/v1/comparison (server must be running).
 
 ## Data Requirements
 
@@ -68,5 +79,9 @@ STORMGLASS_API_KEY=your_key_here
 
 ## Accuracy
 
-- Timing: ±10-30 minutes vs reference data
-- Heights: ±0.3ft after datum correction
+This is a **global physics-based model** (FES2022), not calibrated to local tide stations:
+- **Timing accuracy**: Typically ±10-30 minutes, but can be ±1-4 hours in complex coastal areas (harbors, bays, estuaries)
+- **Tidal range accuracy**: ±0.3m for consecutive high/low differences
+- **Known limitations**: Poor accuracy in areas with complex coastal geometry, shallow water effects, or strong local resonance
+
+The comparison endpoint shows where FES2022 works well vs. poorly by comparing against NOAA (US only, high accuracy) and commercial providers.

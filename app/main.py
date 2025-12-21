@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse
 
 from .astronomy_service import AstronomyService
 from .tide_service import FES2022TideService, TidalDatum
@@ -242,3 +243,27 @@ async def get_sun_moon_tides(
 @app.get("/health")
 async def health():
     return {"status": "healthy", "model": "FES2022b", "astronomy": "Skyfield 1.46"}
+
+
+@app.get("/api/v1/comparison", response_class=HTMLResponse)
+async def get_comparison(
+    days: int = Query(3, ge=1, le=7, description="Number of days to compare (1-7)"),
+):
+    """
+    Get an HTML comparison report showing FES2022 predictions vs other providers for all test locations.
+
+    Displays tide predictions with time and range comparisons across:
+    - FES2022 (our model)
+    - NOAA CO-OPS (free, US locations only)
+    - WorldTides (requires API key, global coverage)
+    - Storm Glass (requires API key, global coverage)
+
+    Compares 17 global surf spots across 6 continents.
+    """
+    from .comparison import generate_comparison_html
+
+    try:
+        html = generate_comparison_html(None, days)
+        return HTMLResponse(content=html)
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))

@@ -29,7 +29,7 @@ docker-compose down             # Stop
 # Run unit tests only (excludes external API comparisons)
 pytest tests/ -v -m "not comparison"
 
-# Run comparison tests only (Surfline + Storm Glass)
+# Run comparison tests only (NOAA + WorldTides + StormGlass)
 pytest tests/ -v -s -m comparison
 
 # Run all tests (unit + comparison)
@@ -37,6 +37,9 @@ pytest tests/ -v
 
 # Run comparison for a specific location
 pytest tests/test_provider_comparison.py::TestProviderComparison::test_multi_provider_comparison[malibu] -v -s
+
+# View web-based comparison (server must be running)
+open http://localhost:8000/api/v1/comparison
 ```
 
 ## Testing
@@ -48,25 +51,30 @@ pytest tests/test_provider_comparison.py::TestProviderComparison::test_multi_pro
 - Tide prediction validation (structure, alternation, heights)
 - Timezone auto-detection for 7 global locations
 
-**Surfline Comparison Tests** (`tests/test_surfline_comparison.py`):
-- Compares predictions against live Surfline API for global surf spots
-- Tests timing accuracy (when high/low tides occur)
-- Tests tidal range accuracy (height difference between consecutive tides)
-- Note: Absolute heights not compared since different services use different datums
-- Requires internet connection
-
 **Provider Comparison Tests** (`tests/test_provider_comparison.py`):
-- Compares predictions against multiple commercial providers (Surfline and Storm Glass)
+- Compares predictions against multiple tide providers:
+  - NOAA CO-OPS (US waters only, no API key needed, free)
+  - WorldTides (global coverage, requires API key)
+  - Storm Glass (global coverage, requires API key)
 - Generates comparison tables showing side-by-side results for 17 global test locations
 - Tests timing accuracy and tidal range accuracy across different services
-- Out-of-range values highlighted in red with specific status: `⚠️ TIME`, `⚠️ RANGE`, or `⚠️ TIME+RANGE`
-- Requires Storm Glass API key for complete comparison (Surfline works without key)
+- Out-of-range values highlighted in red with status: `⚠️ TIME`, `⚠️ RANGE`, or `⚠️ TIME+RANGE`
+- API keys configured via `.env` file (NOAA works without key but US-only)
 
-**Test Locations** (`tests/spots.py`):
-- 17 surf spots across 6 continents used for comparison tests
+**Web-based Comparison** (`app/comparison.py` + `/api/v1/comparison` endpoint):
+- HTML-based comparison report accessible at http://localhost:8000/api/v1/comparison
+- Displays all 17 test locations in a single page with side-by-side comparisons
+- Shows time differences and tidal range differences for each provider
+- Highlights out-of-tolerance values in red (>30 min time diff or >0.5m range diff)
+- Matching window: 6 hours (to account for FES2022 timing errors in complex coastal areas)
+- Useful for identifying where FES2022 has accuracy issues
+
+**Test Locations** (`tests/test_locations.py`):
+- 17 global coastal locations across 6 continents used for comparison tests
+- US locations include NOAA station IDs for NOAA CO-OPS integration
 - Edit this file to add/remove test locations
 
-**Test Configuration** (`tests/config.py`):
+**Test Configuration** (`tests/test_config.py`):
 Environment variables to adjust test tolerances:
 - `TIDE_TEST_TIME_TOLERANCE_MINUTES` - Max time diff allowed (default: 30)
 - `TIDE_TEST_RANGE_TOLERANCE_METERS` - Max tidal range diff allowed (default: 0.5)
@@ -82,8 +90,16 @@ Environment variables to adjust test tolerances:
   - `GET /api/v1/tides` - Tide predictions
   - `GET /api/v1/sun-moon` - Sun/moon events
   - `GET /api/v1/sun-moon-tides` - Combined data
+  - `GET /api/v1/comparison` - HTML comparison report (all test locations)
   - `GET /health` - Health check
 - Environment variable: `FES_DATA_PATH` (defaults to `/data` in Docker, `./` locally)
+
+**Comparison Module** (`app/comparison.py`):
+- Fetches tide data from multiple providers (NOAA, WorldTides, StormGlass)
+- Generates HTML comparison tables with time/range differences
+- Uses 6-hour matching window to handle large FES2022 timing errors
+- Dynamically loads API keys from `.env` file using python-dotenv
+- Imports test locations from `tests/test_locations.py`
 
 **Tide Service** (`app/tide_service.py`):
 - `FES2022TideService` class performs harmonic tide analysis
@@ -97,7 +113,8 @@ Environment variables to adjust test tolerances:
 
 **Environment Variables**:
 - `FES_DATA_PATH` - Path to data directory (defaults to `/data` in Docker, `./` locally)
-- `STORMGLASS_API_KEY` - API key for Storm Glass integration (optional, used only for testing)
+- `STORMGLASS_API_KEY` - API key for Storm Glass (optional, testing/comparison only)
+- `WORLDTIDES_API_KEY` - API key for WorldTides (optional, testing/comparison only)
 - `TIDE_TEST_TIME_TOLERANCE_MINUTES` - Time tolerance for tests (default: 30)
 - `TIDE_TEST_RANGE_TOLERANCE_METERS` - Range tolerance for tests (default: 0.5)
 - `TIDE_TEST_PREDICTION_DAYS` - Days to predict in tests (default: 3)
@@ -128,6 +145,12 @@ curl "http://localhost:8000/api/v1/sun-moon-tides?lat=45.65&lon=13.76&days=7"
 ```
 Returns both tides and sun/moon data in a single response.
 
+**View comparison report:**
+```bash
+open http://localhost:8000/api/v1/comparison
+```
+Returns HTML page comparing FES2022 against NOAA, WorldTides, and StormGlass for all 17 test locations.
+
 ## Key Implementation Details
 
 - Tide heights are calculated via harmonic synthesis using constituent amplitude/phase data
@@ -135,23 +158,48 @@ Returns both tides and sun/moon data in a single response.
 - Extrema detection uses gradient zero-crossings with 3-minute resolution + parabolic interpolation
 - Datum offset can be applied to convert MSL to chart datum
 
-## Storm Glass Integration
+## Provider Integrations for Testing
 
-The Storm Glass API is used only for validation purposes to test the accuracy of our FES2022 tide predictions:
+Multiple tide providers validate our FES2022 predictions:
 
-- Sign up at https://stormglass.io/ to get an API key
-- Add your key to `.env` file: `STORMGLASS_API_KEY=your_key_here`
-- Free tier allows 50 requests/day (each test location = 1 request)
-- Provider comparison tests use this API to compare predictions across multiple services
-- The integration is strictly for testing, not used in production predictions
+**NOAA CO-OPS (National Oceanic and Atmospheric Administration)**:
+- Free government service, no API key needed
+- Coverage: US waters only
+- Uses station IDs (not lat/lon)
+- API: https://api.tidesandcurrents.noaa.gov/
+- Very high accuracy for US coastal locations
+
+**WorldTides**:
+- Commercial service, requires API key
+- Coverage: Global
+- Uses lat/lon coordinates
+- Sign up: https://www.worldtides.info/
+- Add key to `.env`: `WORLDTIDES_API_KEY=your_key_here`
+- Free tier: 100 credits on signup (1 credit per 7-day prediction)
+
+**Storm Glass**:
+- Commercial service, requires API key
+- Coverage: Global
+- Uses lat/lon coordinates
+- Sign up: https://stormglass.io/
+- Add key to `.env`: `STORMGLASS_API_KEY=your_key_here`
+- Free tier: 50 requests/day
+
+All integrations are strictly for testing/validation, not used in production.
 
 ## Accuracy Notes
 
 This is a **global physics-based model** (FES2022), not calibrated to local tide stations:
-- **Timing accuracy**: ±30-60 minutes (typical for global models)
+- **Timing accuracy**: Typically ±10-30 minutes, but can be ±1-4 hours in complex coastal areas
 - **Tidal range accuracy**: ±0.3m (height difference between consecutive high/low)
+- **Known problem areas**:
+  - Complex harbors (e.g., New York Harbor: ~4 hours early)
+  - Shallow bays and estuaries with strong local effects
+  - Areas with significant coastal geometry complexity
 
-Services like Surfline and Storm Glass use local tide gauge data which gives ±5-10 minute timing accuracy, but only works where they have station data. Our approach provides worldwide coverage at the cost of some timing precision.
+Services like NOAA use local tide gauge data which gives ±5-10 minute timing accuracy, but only works where they have station data. Our approach provides worldwide coverage at the cost of some timing precision.
+
+**Use the comparison endpoint** (http://localhost:8000/api/v1/comparison) to identify where FES2022 works well vs. poorly for your region.
 
 ## Dependencies
 

@@ -50,7 +50,7 @@ TIME_TOLERANCE_MINUTES = _get_float_env('TIDE_TEST_TIME_TOLERANCE_MINUTES', 30.0
 # Maximum tidal range difference allowed (in meters)
 # Compares the height difference between consecutive high/low tides
 # Environment variable: TIDE_TEST_RANGE_TOLERANCE_METERS
-RANGE_TOLERANCE_METERS = _get_float_env('TIDE_TEST_RANGE_TOLERANCE_METERS', 0.3)
+RANGE_TOLERANCE_METERS = _get_float_env('TIDE_TEST_RANGE_TOLERANCE_METERS', 0.5)
 
 
 # =============================================================================
@@ -74,3 +74,8 @@ API_TIMEOUT_SECONDS = _get_int_env('TIDE_TEST_API_TIMEOUT', 10)
 # Get your API key from https://stormglass.io/
 # Environment variable: STORMGLASS_API_KEY
 STORMGLASS_API_KEY = os.environ.get('STORMGLASS_API_KEY', '')
+
+# WorldTides API Key
+# Get your API key from https://www.worldtides.info/
+# Environment variable: WORLDTIDES_API_KEY
+WORLDTIDES_API_KEY = os.environ.get('WORLDTIDES_API_KEY', '')

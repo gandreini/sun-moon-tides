@@ -2,7 +2,8 @@
 Multi-Provider Tide Comparison Tests
 
 Compares FES2022 predictions against multiple commercial tide services:
-- Surfline (station-based, US-focused)
+- NOAA CO-OPS (US waters only, free)
+- WorldTides (global coverage)
 - Storm Glass (global coverage)
 
 Generates comparison tables showing side-by-side differences.
@@ -15,55 +16,120 @@ from typing import List, Dict, Optional
 from tabulate import tabulate
 
 from app.tide_service import FES2022TideService
-from tests.config import (
+from tests.test_config import (
     TIME_TOLERANCE_MINUTES,
     RANGE_TOLERANCE_METERS,
     PREDICTION_DAYS,
     API_TIMEOUT_SECONDS,
     STORMGLASS_API_KEY,
+    WORLDTIDES_API_KEY,
 )
-from tests.spots import SURFLINE_SPOTS
+from tests.test_locations import TEST_LOCATIONS
 
 
-# Convert SURFLINE_SPOTS to TEST_LOCATIONS format (with surfline_spot_id key)
-TEST_LOCATIONS = {
-    key: {
-        'name': spot['name'],
-        'lat': spot['lat'],
-        'lon': spot['lon'],
-        'surfline_spot_id': spot['spot_id'],
-    }
-    for key, spot in SURFLINE_SPOTS.items()
-}
+def fetch_noaa_tides(station_id: Optional[str], days: int = 3) -> Optional[List[Dict]]:
+    """Fetch tide data from NOAA CO-OPS API.
 
+    Args:
+        station_id: NOAA station ID (e.g., '9414290' for San Francisco)
+        days: Number of days to fetch
 
-def fetch_surfline_tides(spot_id: str) -> Optional[List[Dict]]:
-    """Fetch tide data from Surfline API."""
-    url = f"https://services.surfline.com/kbyg/spots/forecasts/tides?spotId={spot_id}"
+    Returns:
+        List of normalized tide dicts, or None if station_id is None or fetch fails
+    """
+    if not station_id:
+        return None
+
+    from datetime import datetime, timedelta
+
+    # Calculate date range in YYYYMMDD format
+    start = datetime.utcnow()
+    end = start + timedelta(days=days)
+    begin_date = start.strftime('%Y%m%d')
+    end_date = end.strftime('%Y%m%d')
+
+    url = (f"https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?"
+           f"product=predictions&station={station_id}"
+           f"&begin_date={begin_date}&end_date={end_date}"
+           f"&datum=MLLW&time_zone=gmt&units=metric&format=json&interval=hilo")
 
     try:
         with urllib.request.urlopen(url, timeout=API_TIMEOUT_SECONDS) as response:
             data = json.loads(response.read().decode())
 
         extrema = []
-        for entry in data.get('data', {}).get('tides', []):
+        for entry in data.get('predictions', []):
+            time_str = entry.get('t')
+            height_str = entry.get('v')
             tide_type = entry.get('type', '').upper()
-            if tide_type in ('HIGH', 'LOW'):
-                timestamp = entry.get('timestamp')
-                height = entry.get('height')
 
-                if timestamp and height is not None:
-                    dt = datetime.utcfromtimestamp(timestamp)
-                    extrema.append({
-                        'provider': 'Surfline',
-                        'type': tide_type.lower(),
-                        'datetime': dt,
-                        'height_m': height,
-                    })
+            if time_str and height_str and tide_type in ('H', 'L'):
+                # Parse ISO format time (YYYY-MM-DD HH:MM)
+                dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M')
+
+                extrema.append({
+                    'provider': 'NOAA',
+                    'type': 'high' if tide_type == 'H' else 'low',
+                    'datetime': dt,
+                    'height_m': float(height_str),
+                })
 
         return sorted(extrema, key=lambda x: x['datetime'])
     except Exception as e:
-        print(f"Surfline fetch failed: {e}")
+        print(f"NOAA fetch failed: {e}")
+        return None
+
+
+def fetch_worldtides_tides(lat: float, lon: float, days: int = 3) -> Optional[List[Dict]]:
+    """Fetch tide data from WorldTides API.
+
+    Args:
+        lat: Latitude
+        lon: Longitude
+        days: Number of days to fetch
+
+    Returns:
+        List of normalized tide dicts, or None if API key missing or fetch fails
+    """
+    if not WORLDTIDES_API_KEY:
+        return None
+
+    from datetime import datetime, timedelta
+    import time
+
+    # Calculate start time and length
+    start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    start_timestamp = int(time.mktime(start.timetuple()))
+    length_seconds = days * 86400
+
+    url = (f"https://www.worldtides.info/api/v3?"
+           f"extremes&lat={lat}&lon={lon}"
+           f"&start={start_timestamp}&length={length_seconds}"
+           f"&key={WORLDTIDES_API_KEY}")
+
+    try:
+        with urllib.request.urlopen(url, timeout=API_TIMEOUT_SECONDS) as response:
+            data = json.loads(response.read().decode())
+
+        extrema = []
+        for entry in data.get('extremes', []):
+            timestamp = entry.get('dt')
+            height = entry.get('height')
+            tide_type = entry.get('type', '').lower()
+
+            if timestamp and height is not None and tide_type in ('high', 'low'):
+                dt = datetime.utcfromtimestamp(timestamp)
+
+                extrema.append({
+                    'provider': 'WorldTides',
+                    'type': tide_type,
+                    'datetime': dt,
+                    'height_m': height,
+                })
+
+        return sorted(extrema, key=lambda x: x['datetime'])
+    except Exception as e:
+        print(f"WorldTides fetch failed: {e}")
         return None
 
 
@@ -186,24 +252,34 @@ def calculate_tidal_ranges(tides: List[Dict]) -> List[Dict]:
 
 
 def create_comparison_table(our_tides: List[Dict],
-                           surfline_tides: Optional[List[Dict]],
-                           stormglass_tides: Optional[List[Dict]]) -> str:
-    """Create a comparison table showing all three providers side by side.
+                           provider_tides: Dict[str, Optional[List[Dict]]]) -> str:
+    """Create a comparison table showing FES2022 vs multiple providers.
 
-    Compares timing and tidal range (not absolute heights, since different
-    providers use different datums like MSL vs MLLW).
+    Args:
+        our_tides: List of FES2022 predictions
+        provider_tides: Dict mapping provider name to their tide data
+                       Example: {'NOAA': [...], 'WorldTides': [...]}
+
+    Returns:
+        Formatted table string with comparison data
     """
-
-    # Calculate tidal ranges for each provider
+    # Calculate tidal ranges for all providers
     our_tides_with_range = calculate_tidal_ranges(our_tides)
-    sf_tides_with_range = calculate_tidal_ranges(surfline_tides) if surfline_tides else None
-    sg_tides_with_range = calculate_tidal_ranges(stormglass_tides) if stormglass_tides else None
+    provider_ranges = {
+        name: calculate_tidal_ranges(tides) if tides else None
+        for name, tides in provider_tides.items()
+    }
+
+    # Build dynamic headers - now more compact
+    headers = ['Type', 'FES2022 Time', 'FES2022 Range']
+    for provider_name in sorted(provider_tides.keys()):
+        headers.extend([
+            f'{provider_name} Time',
+            f'{provider_name} Range',
+        ])
+    headers.append('Status')
 
     table_data = []
-    headers = ['Type', 'FES2022 Time', 'FES2022 Range',
-               'Surfline Time', 'Surfline Range', 'Δ Time (min)', 'Δ Range (m)',
-               'StormGlass Time', 'StormGlass Range', 'Δ Time (min)', 'Δ Range (m)',
-               'Status']
 
     for our_tide in our_tides_with_range:
         our_range_str = f"{our_tide['range_from_prev']:.2f}m" if our_tide['range_from_prev'] else '—'
@@ -213,69 +289,51 @@ def create_comparison_table(our_tides: List[Dict],
             our_range_str,
         ]
 
-        # Surfline comparison
-        sf_time_ok = None
-        sf_range_ok = None
-        if sf_tides_with_range:
-            sf_match = find_matching_tide(our_tide, sf_tides_with_range)
-            if sf_match:
-                time_diff = (sf_match['datetime'] - our_tide['datetime']).total_seconds() / 60
-                sf_range_str = f"{sf_match['range_from_prev']:.2f}m" if sf_match['range_from_prev'] else '—'
+        time_checks = []
+        range_checks = []
 
-                sf_time_ok = abs(time_diff) <= TIME_TOLERANCE_MINUTES
-                time_diff_str = format_value(f"{time_diff:+.0f}", sf_time_ok)
+        # Compare against each provider
+        for provider_name in sorted(provider_tides.keys()):
+            provider_data = provider_ranges[provider_name]
 
-                row.extend([
-                    sf_match['datetime'].strftime('%m/%d %H:%M'),
-                    sf_range_str,
-                    time_diff_str,
-                ])
+            if provider_data:
+                match = find_matching_tide(our_tide, provider_data)
+                if match:
+                    # Time comparison - show absolute time with delta in parentheses
+                    time_diff = (match['datetime'] - our_tide['datetime']).total_seconds() / 60
+                    time_ok = abs(time_diff) <= TIME_TOLERANCE_MINUTES
+                    time_checks.append(time_ok)
 
-                # Compare tidal ranges (only if both have range data)
-                if our_tide['range_from_prev'] is not None and sf_match['range_from_prev'] is not None:
-                    range_diff = sf_match['range_from_prev'] - our_tide['range_from_prev']
-                    sf_range_ok = abs(range_diff) <= RANGE_TOLERANCE_METERS
-                    row.append(format_value(f"{range_diff:+.2f}", sf_range_ok))
+                    time_str = match['datetime'].strftime('%m/%d %H:%M')
+                    time_delta = f"({time_diff:+.0f}min)"
+                    if not time_ok:
+                        time_delta = f"{RED_BOLD}{time_delta}{RESET}"
+                    time_display = f"{time_str} {time_delta}"
+
+                    # Range comparison - show absolute range with delta in parentheses
+                    range_str = f"{match['range_from_prev']:.2f}m" if match['range_from_prev'] else '—'
+
+                    if our_tide['range_from_prev'] is not None and match['range_from_prev'] is not None:
+                        range_diff = match['range_from_prev'] - our_tide['range_from_prev']
+                        range_ok = abs(range_diff) <= RANGE_TOLERANCE_METERS
+                        range_checks.append(range_ok)
+
+                        range_delta = f"({range_diff:+.2f}m)"
+                        if not range_ok:
+                            range_delta = f"{RED_BOLD}{range_delta}{RESET}"
+                        range_display = f"{range_str} {range_delta}"
+                    else:
+                        range_display = range_str
+
+                    row.extend([time_display, range_display])
                 else:
-                    row.append('—')
+                    row.extend(['—', '—'])
             else:
-                row.extend(['—', '—', '—', '—'])
-        else:
-            row.extend(['N/A', 'N/A', 'N/A', 'N/A'])
+                row.extend(['N/A', 'N/A'])
 
-        # Storm Glass comparison
-        sg_time_ok = None
-        sg_range_ok = None
-        if sg_tides_with_range:
-            sg_match = find_matching_tide(our_tide, sg_tides_with_range)
-            if sg_match:
-                time_diff = (sg_match['datetime'] - our_tide['datetime']).total_seconds() / 60
-                sg_range_str = f"{sg_match['range_from_prev']:.2f}m" if sg_match['range_from_prev'] else '—'
-
-                sg_time_ok = abs(time_diff) <= TIME_TOLERANCE_MINUTES
-                time_diff_str = format_value(f"{time_diff:+.0f}", sg_time_ok)
-
-                row.extend([
-                    sg_match['datetime'].strftime('%m/%d %H:%M'),
-                    sg_range_str,
-                    time_diff_str,
-                ])
-
-                # Compare tidal ranges (only if both have range data)
-                if our_tide['range_from_prev'] is not None and sg_match['range_from_prev'] is not None:
-                    range_diff = sg_match['range_from_prev'] - our_tide['range_from_prev']
-                    sg_range_ok = abs(range_diff) <= RANGE_TOLERANCE_METERS
-                    row.append(format_value(f"{range_diff:+.2f}", sg_range_ok))
-                else:
-                    row.append('—')
-            else:
-                row.extend(['—', '—', '—', '—'])
-        else:
-            row.extend(['N/A', 'N/A', 'N/A', 'N/A'])
-
-        # Status indicator - be specific about what's out of range
-        time_issue = sf_time_ok is False or sg_time_ok is False
-        range_issue = sf_range_ok is False or sg_range_ok is False
+        # Calculate status based on all providers
+        time_issue = False in time_checks
+        range_issue = False in range_checks
 
         if time_issue and range_issue:
             status = f'{RED_BOLD}⚠️ TIME+RANGE{RESET}'
@@ -283,7 +341,7 @@ def create_comparison_table(our_tides: List[Dict],
             status = f'{RED_BOLD}⚠️ TIME{RESET}'
         elif range_issue:
             status = f'{RED_BOLD}⚠️ RANGE{RESET}'
-        elif sf_time_ok is None and sg_time_ok is None:
+        elif not time_checks and not range_checks:
             status = '—'
         else:
             status = '✓ OK'
@@ -305,7 +363,7 @@ class TestProviderComparison:
 
     @pytest.mark.parametrize("location_key", list(TEST_LOCATIONS.keys()))
     def test_multi_provider_comparison(self, service, location_key):
-        """Compare FES2022 against Surfline and Storm Glass with detailed table."""
+        """Compare FES2022 against NOAA, WorldTides, and Storm Glass."""
         location = TEST_LOCATIONS[location_key]
 
         print(f"\n{'='*80}")
@@ -315,48 +373,47 @@ class TestProviderComparison:
 
         # Fetch from all providers
         our_tides = get_our_tides(location['lat'], location['lon'], PREDICTION_DAYS)
-        surfline_tides = fetch_surfline_tides(location['surfline_spot_id'])
-        stormglass_tides = fetch_stormglass_tides(location['lat'], location['lon'], PREDICTION_DAYS)
+
+        provider_tides = {
+            'NOAA': fetch_noaa_tides(location.get('noaa_station_id'), PREDICTION_DAYS),
+            'StormGlass': fetch_stormglass_tides(location['lat'], location['lon'], PREDICTION_DAYS),
+            'WorldTides': fetch_worldtides_tides(location['lat'], location['lon'], PREDICTION_DAYS),
+        }
 
         # Print availability
         print(f"✓ FES2022: {len(our_tides)} tides")
-        print(f"{'✓' if surfline_tides else '✗'} Surfline: {len(surfline_tides) if surfline_tides else 'N/A'}")
-        print(f"{'✓' if stormglass_tides else '✗'} Storm Glass: {len(stormglass_tides) if stormglass_tides else 'N/A'}")
+        for provider_name, tides in sorted(provider_tides.items()):
+            symbol = '✓' if tides else '✗'
+            count = len(tides) if tides else 'N/A'
+            print(f"{symbol} {provider_name}: {count}")
 
+        # Print warnings for missing API keys
+        if not WORLDTIDES_API_KEY:
+            print("\n⚠️  WorldTides API key not configured. Set WORLDTIDES_API_KEY environment variable.")
         if not STORMGLASS_API_KEY:
             print("\n⚠️  Storm Glass API key not configured. Set STORMGLASS_API_KEY environment variable.")
 
         print()
 
         # Create and print comparison table
-        table = create_comparison_table(our_tides, surfline_tides, stormglass_tides)
+        table = create_comparison_table(our_tides, provider_tides)
         print(table)
         print()
 
         # Collect failures
         failures = []
 
-        # Check Surfline timing
-        if surfline_tides:
-            for our_tide in our_tides:
-                sf_match = find_matching_tide(our_tide, surfline_tides)
-                if sf_match:
-                    time_diff = abs((sf_match['datetime'] - our_tide['datetime']).total_seconds() / 60)
-                    if time_diff > TIME_TOLERANCE_MINUTES:
-                        failures.append(
-                            f"Surfline: {our_tide['type'].upper()} at {our_tide['datetime']}: "
-                            f"time diff {time_diff:.0f}min > {TIME_TOLERANCE_MINUTES}min"
-                        )
+        for provider_name, tides in provider_tides.items():
+            if not tides:
+                continue
 
-        # Check Storm Glass timing
-        if stormglass_tides:
             for our_tide in our_tides:
-                sg_match = find_matching_tide(our_tide, stormglass_tides)
-                if sg_match:
-                    time_diff = abs((sg_match['datetime'] - our_tide['datetime']).total_seconds() / 60)
+                match = find_matching_tide(our_tide, tides)
+                if match:
+                    time_diff = abs((match['datetime'] - our_tide['datetime']).total_seconds() / 60)
                     if time_diff > TIME_TOLERANCE_MINUTES:
                         failures.append(
-                            f"StormGlass: {our_tide['type'].upper()} at {our_tide['datetime']}: "
+                            f"{provider_name}: {our_tide['type'].upper()} at {our_tide['datetime']}: "
                             f"time diff {time_diff:.0f}min > {TIME_TOLERANCE_MINUTES}min"
                         )
 
