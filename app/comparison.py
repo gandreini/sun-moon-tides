@@ -24,25 +24,8 @@ STORMGLASS_API_KEY = os.environ.get('STORMGLASS_API_KEY', '')
 WORLDTIDES_API_KEY = os.environ.get('WORLDTIDES_API_KEY', '')
 
 
-# Test locations - import from test file
-try:
-    from tests.test_locations import TEST_LOCATIONS
-except ImportError:
-    # Fallback if tests module not available
-    TEST_LOCATIONS = {
-        'malibu': {
-            'name': 'Malibu, California',
-            'lat': 34.032023,
-            'lon': -118.678676,
-            'noaa_station_id': '9410840',
-        },
-        'pipeline': {
-            'name': 'Pipeline, Hawaii',
-            'lat': 21.665312,
-            'lon': -158.053881,
-            'noaa_station_id': '1612340',
-        },
-    }
+# Import test locations from app module (not tests, to ensure availability in production)
+from app.locations import TEST_LOCATIONS
 
 
 def fetch_noaa_tides(station_id: Optional[str], days: int = 3) -> Optional[List[Dict]]:
