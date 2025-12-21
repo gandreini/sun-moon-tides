@@ -886,6 +886,10 @@ def generate_comparison_shell_html(days: int = 3) -> str:
 
         async function loadLocation(locationKey) {{
             try {{
+                // Update detail to show which location is being loaded
+                const loadingDetail = document.getElementById('loadingDetail');
+                loadingDetail.textContent = `Loading ${{locationKey}}... (${{loadedCount + 1}} of ${{totalLocations}})`;
+
                 const response = await fetch(`/api/v1/comparison/location/${{locationKey}}?days=${{days}}`);
                 const html = await response.text();
 
@@ -910,10 +914,11 @@ def generate_comparison_shell_html(days: int = 3) -> str:
             }}
         }}
 
-        // Load all locations in parallel (browser will manage connection pooling)
+        // Load locations sequentially to show visible progress
         async function loadAllLocations() {{
-            const promises = locationKeys.map(key => loadLocation(key));
-            await Promise.all(promises);
+            for (const locationKey of locationKeys) {{
+                await loadLocation(locationKey);
+            }}
         }}
 
         // Start loading when page is ready
