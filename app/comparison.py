@@ -693,17 +693,27 @@ def generate_comparison_shell_html(days: int = 3) -> str:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tide Comparison - All Locations</title>
     <style>
+        * {{
+            box-sizing: border-box;
+        }}
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-            max-width: 1600px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+            max-width: 1400px;
             margin: 0 auto;
-            padding: 20px;
-            background: #f5f5f5;
+            padding: 2rem 1.5rem;
+            background: hsl(0 0% 98%);
+            color: hsl(222.2 84% 4.9%);
+            line-height: 1.6;
         }}
         h1 {{
-            color: #333;
-            border-bottom: 3px solid #0066cc;
-            padding-bottom: 10px;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: hsl(222.2 84% 4.9%);
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.025em;
+        }}
+        h1 .light {{
+            font-weight: 400;
         }}
         .loading-overlay {{
             position: fixed;
@@ -711,145 +721,234 @@ def generate_comparison_shell_html(days: int = 3) -> str:
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(255, 255, 255, 0.95);
+            background: hsl(0 0% 100% / 0.96);
+            backdrop-filter: blur(4px);
             display: flex;
-            flex-direction: column;
             align-items: center;
             justify-content: center;
             z-index: 9999;
         }}
+        .loading-container {{
+            max-width: 420px;
+            width: 100%;
+            padding: 2rem;
+            background: hsl(0 0% 100%);
+            border: 1px solid hsl(214.3 31.8% 91.4%);
+            border-radius: 0.75rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1.5rem;
+        }}
+        .loading-content {{
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+        }}
+        .progress-wrapper {{
+            width: 100%;
+        }}
         .spinner {{
-            width: 60px;
-            height: 60px;
-            border: 6px solid #e3f2ff;
-            border-top: 6px solid #0066cc;
+            width: 48px;
+            height: 48px;
+            border: 3px solid hsl(214.3 31.8% 91.4%);
+            border-top: 3px solid hsl(221.2 83.2% 53.3%);
             border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-bottom: 20px;
+            animation: spin 0.8s linear infinite;
         }}
         @keyframes spin {{
             0% {{ transform: rotate(0deg); }}
             100% {{ transform: rotate(360deg); }}
         }}
         .loading-text {{
-            color: #0066cc;
-            font-size: 18px;
+            color: hsl(222.2 84% 4.9%);
+            font-size: 1rem;
             font-weight: 600;
-            margin-bottom: 10px;
+            text-align: center;
         }}
         .loading-detail {{
-            color: #666;
-            font-size: 14px;
+            color: hsl(215.4 16.3% 46.9%);
+            font-size: 0.875rem;
+            text-align: center;
+        }}
+        .progress-bar {{
+            width: 100%;
+            height: 8px;
+            background: hsl(214.3 31.8% 91.4%);
+            border-radius: 9999px;
+            overflow: hidden;
+        }}
+        .progress-fill {{
+            height: 100%;
+            background: hsl(221.2 83.2% 53.3%);
+            width: 0%;
+            transition: width 0.3s ease;
+            border-radius: 9999px;
+        }}
+        .progress-label {{
+            color: hsl(215.4 16.3% 46.9%);
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-align: center;
+            margin-top: 0.5rem;
         }}
         .location-section {{
-            margin-bottom: 40px;
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+            background: hsl(0 0% 100%);
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            border: 1px solid hsl(214.3 31.8% 91.4%);
         }}
         .location-header {{
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 15px;
+            margin-bottom: 1rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid hsl(214.3 31.8% 91.4%);
         }}
         h2 {{
-            color: #0066cc;
+            color: hsl(222.2 84% 4.9%);
+            font-size: 1.5rem;
+            font-weight: 600;
             margin: 0;
+            letter-spacing: -0.025em;
         }}
         .coords {{
-            color: #666;
-            font-size: 14px;
+            color: hsl(215.4 16.3% 46.9%);
+            font-size: 0.875rem;
+            font-weight: 500;
         }}
         .providers {{
             display: flex;
-            gap: 10px;
-            margin-bottom: 15px;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
             flex-wrap: wrap;
         }}
         .provider-status {{
-            padding: 6px 12px;
-            border-radius: 15px;
-            font-size: 13px;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
             font-weight: 500;
+            border: 1px solid transparent;
         }}
         .provider-active {{
-            background: #d4edda;
-            color: #155724;
+            background: hsl(142.1 76.2% 36.3% / 0.1);
+            color: hsl(142.1 70.6% 45.3%);
+            border-color: hsl(142.1 76.2% 36.3% / 0.2);
         }}
         .provider-inactive {{
-            background: #f8d7da;
-            color: #721c24;
+            background: hsl(0 84.2% 60.2% / 0.1);
+            color: hsl(0 72.2% 50.6%);
+            border-color: hsl(0 84.2% 60.2% / 0.2);
         }}
         table {{
             width: 100%;
-            border-collapse: collapse;
-            font-size: 14px;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 0.875rem;
+            border: 1px solid hsl(214.3 31.8% 91.4%);
+            border-radius: 0.5rem;
+            overflow: hidden;
         }}
         th {{
-            background: #0066cc;
-            color: white;
-            padding: 10px 8px;
+            background: hsl(0 0% 98%);
+            color: hsl(222.2 47.4% 11.2%);
+            padding: 0.75rem 0.75rem;
             text-align: left;
             font-weight: 600;
-            font-size: 13px;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.025em;
+            border-bottom: 1px solid hsl(214.3 31.8% 91.4%);
         }}
         td {{
-            padding: 8px;
-            border-bottom: 1px solid #eee;
+            padding: 0.75rem 0.75rem;
+            border-bottom: 1px solid hsl(214.3 31.8% 91.4%);
+        }}
+        tr:last-child td {{
+            border-bottom: none;
         }}
         tr:hover {{
-            background: #f8f9fa;
+            background: hsl(0 0% 98%);
         }}
-        .high {{ background: #e3f2fd; }}
-        .low {{ background: #fff3e0; }}
-        .delta-good {{ color: #28a745; font-size: 12px; }}
-        .delta-warning {{ color: #ffc107; font-size: 12px; }}
-        .delta-bad {{ color: #dc3545; font-weight: bold; font-size: 12px; }}
-        .status-ok {{ color: #28a745; }}
-        .status-error {{ color: #dc3545; font-weight: bold; }}
-        .na {{ color: #999; font-size: 12px; }}
-        .info-box {{
-            background: #e7f3ff;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            border-left: 4px solid #0066cc;
+        .high {{
+            background: hsl(221.2 83.2% 53.3% / 0.08);
         }}
-        .progress-bar {{
-            width: 100%;
-            height: 30px;
-            background: #e0e0e0;
-            border-radius: 15px;
-            overflow: hidden;
-            margin-top: 20px;
+        .low {{
+            background: hsl(24.6 95% 53.1% / 0.08);
         }}
-        .progress-fill {{
-            height: 100%;
-            background: linear-gradient(90deg, #0066cc, #0099ff);
-            width: 0%;
-            transition: width 0.3s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-size: 12px;
+        .delta-good {{
+            color: hsl(142.1 70.6% 45.3%);
+            font-size: 0.75rem;
+            font-weight: 500;
+        }}
+        .delta-warning {{
+            color: hsl(47.9 95.8% 53.1%);
+            font-size: 0.75rem;
+            font-weight: 500;
+        }}
+        .delta-bad {{
+            color: hsl(0 72.2% 50.6%);
             font-weight: 600;
+            font-size: 0.75rem;
+        }}
+        .status-ok {{
+            color: hsl(142.1 70.6% 45.3%);
+            font-weight: 500;
+        }}
+        .status-error {{
+            color: hsl(0 72.2% 50.6%);
+            font-weight: 600;
+        }}
+        .na {{
+            color: hsl(215.4 16.3% 46.9%);
+            font-size: 0.75rem;
+        }}
+        .info-box {{
+            background: hsl(221.2 83.2% 53.3% / 0.08);
+            padding: 1rem 1.25rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid hsl(221.2 83.2% 53.3% / 0.2);
+        }}
+        .info-box p {{
+            margin: 0.5rem 0;
+            font-size: 0.875rem;
+            color: hsl(222.2 47.4% 11.2%);
+        }}
+        .info-box p:first-child {{
+            margin-top: 0;
+        }}
+        .info-box p:last-child {{
+            margin-bottom: 0;
+        }}
+        .info-box strong {{
+            font-weight: 600;
+            color: hsl(222.2 84% 4.9%);
         }}
     </style>
 </head>
 <body>
     <div class="loading-overlay" id="loadingOverlay">
-        <div class="spinner"></div>
-        <div class="loading-text">Loading Comparison Data...</div>
-        <div class="loading-detail" id="loadingDetail">Preparing to fetch 17 locations</div>
-        <div class="progress-bar">
-            <div class="progress-fill" id="progressFill">0%</div>
+        <div class="loading-container">
+            <div class="spinner"></div>
+            <div class="loading-content">
+                <div class="loading-text">Loading Comparison Data</div>
+                <div class="loading-detail" id="loadingDetail">Preparing to fetch 17 locations</div>
+            </div>
+            <div class="progress-wrapper">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="progress-label" id="progressLabel">0%</div>
+            </div>
         </div>
     </div>
 
-    <h1>🌊 Tide Comparison - All Test Locations</h1>
+    <h1>Tide Comparison <span class="light">All Test Locations</span></h1>
 
     <div class="info-box">
         <p><strong>Prediction Period:</strong> {days} days</p>
@@ -871,10 +970,11 @@ def generate_comparison_shell_html(days: int = 3) -> str:
         function updateProgress() {{
             const percent = Math.round((loadedCount / totalLocations) * 100);
             const progressFill = document.getElementById('progressFill');
+            const progressLabel = document.getElementById('progressLabel');
             const loadingDetail = document.getElementById('loadingDetail');
 
             progressFill.style.width = percent + '%';
-            progressFill.textContent = percent + '%';
+            progressLabel.textContent = percent + '%';
             loadingDetail.textContent = `Loaded ${{loadedCount}} of ${{totalLocations}} locations`;
 
             if (loadedCount === totalLocations) {{
