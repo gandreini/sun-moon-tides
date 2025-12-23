@@ -23,6 +23,36 @@ API_TIMEOUT_SECONDS = int(os.environ.get('TIDE_TEST_API_TIMEOUT', '10'))
 STORMGLASS_API_KEY = os.environ.get('STORMGLASS_API_KEY', '')
 WORLDTIDES_API_KEY = os.environ.get('WORLDTIDES_API_KEY', '')
 
+# Security: Maximum response size from external APIs (1 MB)
+MAX_RESPONSE_SIZE = 1 * 1024 * 1024
+
+
+def safe_read_response(response, max_size: int = MAX_RESPONSE_SIZE) -> bytes:
+    """
+    Safely read HTTP response with size limit to prevent memory exhaustion.
+
+    Args:
+        response: urllib response object
+        max_size: Maximum allowed response size in bytes
+
+    Returns:
+        Response body as bytes
+
+    Raises:
+        ValueError: If response exceeds size limit
+    """
+    # Check Content-Length header if available
+    content_length = response.headers.get('Content-Length')
+    if content_length and int(content_length) > max_size:
+        raise ValueError(f"Response too large: {content_length} bytes (max: {max_size})")
+
+    # Read with size limit (read one extra byte to detect overflow)
+    data = response.read(max_size + 1)
+    if len(data) > max_size:
+        raise ValueError(f"Response exceeded size limit of {max_size} bytes")
+
+    return data
+
 
 # Import test locations from app module (not tests, to ensure availability in production)
 from app.locations import TEST_LOCATIONS
@@ -45,7 +75,7 @@ def fetch_noaa_tides(station_id: Optional[str], days: int = 3) -> Optional[List[
 
     try:
         with urllib.request.urlopen(url, timeout=API_TIMEOUT_SECONDS) as response:
-            data = json.loads(response.read().decode())
+            data = json.loads(safe_read_response(response).decode())
 
         extrema = []
         for entry in data.get('predictions', []):
@@ -86,7 +116,7 @@ def fetch_worldtides_tides(lat: float, lon: float, days: int = 3) -> Optional[Li
 
     try:
         with urllib.request.urlopen(url, timeout=API_TIMEOUT_SECONDS) as response:
-            data = json.loads(response.read().decode())
+            data = json.loads(safe_read_response(response).decode())
 
         extrema = []
         for entry in data.get('extremes', []):
@@ -126,7 +156,7 @@ def fetch_stormglass_tides(lat: float, lon: float, days: int = 3) -> Optional[Li
     try:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=API_TIMEOUT_SECONDS) as response:
-            data = json.loads(response.read().decode())
+            data = json.loads(safe_read_response(response).decode())
 
         extrema = []
         for entry in data.get('data', []):

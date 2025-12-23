@@ -26,60 +26,29 @@ docker-compose up --build       # Build and start
 docker-compose up -d            # Run in background
 docker-compose down             # Stop
 
-# Run unit tests only (excludes external API comparisons)
-pytest tests/ -v -m "not comparison"
-
-# Run comparison tests only (NOAA + WorldTides + StormGlass)
-pytest tests/ -v -s -m comparison
-
-# Run all tests (unit + comparison)
+# Run tests
 pytest tests/ -v
-
-# Run comparison for a specific location
-pytest tests/test_provider_comparison.py::TestProviderComparison::test_multi_provider_comparison[malibu] -v -s
-
-# View web-based comparison (server must be running)
-open http://localhost:8000/api/v1/comparison
 ```
 
 ## Testing
 
-**Unit Tests** (`tests/test_tide_service.py`):
+**Tide Service Tests** (`tests/test_tide_service.py`):
 - Service initialization and error handling
 - Constituent data reading (M2, S2, K1, O1)
 - Longitude format conversion (0-360 vs -180-180)
 - Tide prediction validation (structure, alternation, heights)
 - Timezone auto-detection for 7 global locations
 
-**Provider Comparison Tests** (`tests/test_provider_comparison.py`):
-- Compares predictions against multiple tide providers:
-  - NOAA CO-OPS (US waters only, no API key needed, free)
-  - WorldTides (global coverage, requires API key)
-  - Storm Glass (global coverage, requires API key)
-- Generates comparison tables showing side-by-side results for 17 global test locations
-- Tests timing accuracy and tidal range accuracy across different services
-- Out-of-range values highlighted in red with status: `⚠️ TIME`, `⚠️ RANGE`, or `⚠️ TIME+RANGE`
-- API keys configured via `.env` file (NOAA works without key but US-only)
+**Astronomy Service Tests** (`tests/test_astronomy_service.py`):
+- Sun/moon calculations and event detection
 
-**Web-based Comparison** (`app/comparison.py` + `/api/v1/comparison` endpoint):
-- HTML-based comparison report accessible at http://localhost:8000/api/v1/comparison
-- Displays all 17 test locations in a single page with side-by-side comparisons
-- Shows time differences and tidal range differences for each provider
-- Highlights out-of-tolerance values in red (>30 min time diff or >0.5m range diff)
-- Matching window: 6 hours (to account for FES2022 timing errors in complex coastal areas)
+**API Tests** (`tests/test_api.py`):
+- Endpoint validation and response format tests
+
+**Web-based Comparison** (`/api/v1/comparison` endpoint):
+- HTML report comparing FES2022 against NOAA, WorldTides, and StormGlass
+- Accessible at http://localhost:8000/api/v1/comparison
 - Useful for identifying where FES2022 has accuracy issues
-
-**Test Locations** (`tests/test_locations.py`):
-- 17 global coastal locations across 6 continents used for comparison tests
-- US locations include NOAA station IDs for NOAA CO-OPS integration
-- Edit this file to add/remove test locations
-
-**Test Configuration** (`tests/test_config.py`):
-Environment variables to adjust test tolerances:
-- `TIDE_TEST_TIME_TOLERANCE_MINUTES` - Max time diff allowed (default: 30)
-- `TIDE_TEST_RANGE_TOLERANCE_METERS` - Max tidal range diff allowed (default: 0.5)
-- `TIDE_TEST_PREDICTION_DAYS` - Days to predict in tests (default: 3)
-- `TIDE_TEST_API_TIMEOUT` - API request timeout in seconds (default: 10)
 
 ## Architecture
 
@@ -109,15 +78,11 @@ Environment variables to adjust test tolerances:
 
 **Data Files**:
 - `ocean_tide_extrapolated/` - Required FES2022 harmonic constituent NetCDF files (e.g., `m2_fes2022.nc`)
-- `load_tide/` - Optional load tide data
 
 **Environment Variables**:
 - `FES_DATA_PATH` - Path to data directory (defaults to `/data` in Docker, `./` locally)
-- `STORMGLASS_API_KEY` - API key for Storm Glass (optional, testing/comparison only)
-- `WORLDTIDES_API_KEY` - API key for WorldTides (optional, testing/comparison only)
-- `TIDE_TEST_TIME_TOLERANCE_MINUTES` - Time tolerance for tests (default: 30)
-- `TIDE_TEST_RANGE_TOLERANCE_METERS` - Range tolerance for tests (default: 0.5)
-- `TIDE_TEST_PREDICTION_DAYS` - Days to predict in tests (default: 3)
+- `STORMGLASS_API_KEY` - API key for Storm Glass (optional, for comparison endpoint)
+- `WORLDTIDES_API_KEY` - API key for WorldTides (optional, for comparison endpoint)
 
 ## API Usage
 
@@ -158,35 +123,6 @@ Returns HTML page comparing FES2022 against NOAA, WorldTides, and StormGlass for
 - Extrema detection uses gradient zero-crossings with 3-minute resolution + parabolic interpolation
 - Datum offset can be applied to convert MSL to chart datum
 
-## Provider Integrations for Testing
-
-Multiple tide providers validate our FES2022 predictions:
-
-**NOAA CO-OPS (National Oceanic and Atmospheric Administration)**:
-- Free government service, no API key needed
-- Coverage: US waters only
-- Uses station IDs (not lat/lon)
-- API: https://api.tidesandcurrents.noaa.gov/
-- Very high accuracy for US coastal locations
-
-**WorldTides**:
-- Commercial service, requires API key
-- Coverage: Global
-- Uses lat/lon coordinates
-- Sign up: https://www.worldtides.info/
-- Add key to `.env`: `WORLDTIDES_API_KEY=your_key_here`
-- Free tier: 100 credits on signup (1 credit per 7-day prediction)
-
-**Storm Glass**:
-- Commercial service, requires API key
-- Coverage: Global
-- Uses lat/lon coordinates
-- Sign up: https://stormglass.io/
-- Add key to `.env`: `STORMGLASS_API_KEY=your_key_here`
-- Free tier: 50 requests/day
-
-All integrations are strictly for testing/validation, not used in production.
-
 ## Accuracy Notes
 
 This is a **global physics-based model** (FES2022), not calibrated to local tide stations:
@@ -212,7 +148,6 @@ Key dependencies include:
 - python-dateutil - Timezone handling
 - timezonefinder - Automatic timezone detection
 - pytest - Testing framework
-- tabulate - For comparison tables in tests
 - python-dotenv - Environment variable management
 
 ## Maintenance Guidelines

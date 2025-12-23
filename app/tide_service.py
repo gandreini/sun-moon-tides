@@ -447,13 +447,12 @@ class FES2022TideService:
     def __init__(self, data_path: str = './'):
         """
         Initialize the FES2022 Tide Service.
-        
+
         Args:
-            data_path: Path to directory containing 'ocean_tide_extrapolated' and 'load_tide' folders
+            data_path: Path to directory containing 'ocean_tide_extrapolated' folder
         """
         self.data_path = data_path
         self.ocean_path = os.path.join(data_path, 'ocean_tide_extrapolated')
-        self.load_path = os.path.join(data_path, 'load_tide')
         
         # Cache for loaded NetCDF datasets
         self._datasets = {}
@@ -467,28 +466,16 @@ class FES2022TideService:
         """Load and cache NetCDF dataset for a constituent."""
         if constituent in self._datasets:
             return self._datasets[constituent]
-        
-        # Try ocean_tide_extrapolated first
+
         ocean_file = os.path.join(self.ocean_path, f"{constituent}_fes2022.nc")
         if os.path.exists(ocean_file):
             try:
                 ds = Dataset(ocean_file, 'r')
                 self._datasets[constituent] = ds
                 return ds
-            except Exception as e:
+            except Exception:
                 pass
-        
-        # Try load_tide if available
-        if os.path.exists(self.load_path):
-            load_file = os.path.join(self.load_path, f"{constituent}_fes2022.nc")
-            if os.path.exists(load_file):
-                try:
-                    ds = Dataset(load_file, 'r')
-                    self._datasets[constituent] = ds
-                    return ds
-                except Exception as e:
-                    pass
-        
+
         return None
     
     def _get_grid_info(self, dataset: Dataset) -> Dict:
@@ -1033,3 +1020,148 @@ class FES2022TideService:
             })
 
         return results
+
+    def get_tides_with_extrema(
+        self,
+        lat: float,
+        lon: float,
+        days: int = 7,
+        interval_minutes: int = 30,
+        timezone_str: Optional[str] = None,
+        datum: TidalDatum = TidalDatum.MSL,
+    ) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Get both tide heights at intervals AND high/low extrema from a single computation.
+
+        This is an optimized method that computes the tide curve once at high resolution,
+        then extracts both the interval samples and the precise extrema times.
+
+        Args:
+            lat: Latitude in degrees
+            lon: Longitude in degrees
+            days: Number of days to predict (1-30)
+            interval_minutes: Time between readings (15, 30, or 60 minutes)
+            timezone_str: Timezone string or None for auto-detect
+            datum: Tidal datum reference (MSL, MLLW, or LAT)
+
+        Returns:
+            Tuple of (interval_heights, extrema_events):
+            - interval_heights: List of height readings at requested interval
+            - extrema_events: List of high/low tide events at precise times
+        """
+        # Validate interval
+        if interval_minutes not in (15, 30, 60):
+            raise ValueError("interval_minutes must be 15, 30, or 60")
+
+        # Auto-detect timezone from coordinates if not provided
+        if timezone_str is None:
+            tf = TimezoneFinder()
+            timezone_str = tf.timezone_at(lat=lat, lng=lon)
+            if timezone_str is None:
+                timezone_str = 'UTC'
+
+        try:
+            tz = ZoneInfo(timezone_str)
+        except Exception:
+            tz = ZoneInfo('UTC')
+
+        # Get current time in the specified timezone
+        now = datetime.now(tz)
+        start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Generate HIGH-RESOLUTION time array (3-minute intervals for accurate extrema)
+        # This is the same resolution used by predict_tides()
+        num_points_highres = days * 24 * 20  # 20 points per hour = 3 minute intervals
+        time_offsets_hours_highres = np.linspace(0, days * 24, num_points_highres)
+        datetimes_highres = [start_time + timedelta(hours=float(h)) for h in time_offsets_hours_highres]
+
+        # Get constituent data (done once)
+        constituents_to_use = [
+            'm2', 's2', 'n2', 'k1', 'o1',
+            'k2', 'l2', 't2', '2n2', 'mu2', 'nu2',
+            'p1', 'q1', 'j1', 'oo1',
+            'm4', 'ms4', 'mn4', 'm6', 'm3',
+            'mf', 'mm', 'ssa', 'sa',
+        ]
+        constituents = {}
+
+        for const in constituents_to_use:
+            amp, phase = self.get_constituent_data(const, lat, lon)
+            if amp > 0.001:
+                constituents[const] = (amp, phase)
+
+        if not constituents:
+            raise ValueError(f"No tide data available for location ({lat}, {lon})")
+
+        # Calculate tide heights at HIGH RESOLUTION (single expensive computation)
+        heights_highres = self._calculate_harmonic_tide_at_times(datetimes_highres, constituents)
+
+        # Apply datum offset
+        offset_to_apply = self._calculate_datum_offset(lat, lon, datum, days=min(days, 30))
+        heights_highres += offset_to_apply
+        datum_used = datum.value
+
+        # === EXTRACT INTERVAL HEIGHTS ===
+        # Calculate step size: how many 3-minute intervals per user interval
+        # 3 min base, so 15 min = every 5th, 30 min = every 10th, 60 min = every 20th
+        step = interval_minutes // 3
+
+        interval_heights = []
+        for i in range(0, len(heights_highres), step):
+            if i < len(datetimes_highres):
+                dt = datetimes_highres[i]
+                height_m = float(heights_highres[i])
+                interval_heights.append({
+                    'datetime': dt.replace(microsecond=0).isoformat(),
+                    'height_m': round(height_m, 3),
+                    'height_ft': round(height_m * 3.28084, 3),
+                    'datum': datum_used
+                })
+
+        # === FIND EXTREMA (HIGH/LOW TIDES) ===
+        extrema_events = []
+        gradient = np.gradient(heights_highres)
+        sign_changes = np.where(np.diff(np.sign(gradient)))[0]
+
+        for idx in sign_changes:
+            if idx < 1 or idx >= len(heights_highres) - 1:
+                continue
+
+            # Determine if it's a high or low tide
+            if gradient[idx] > 0 and gradient[idx + 1] <= 0:
+                tide_type = 'high'
+            elif gradient[idx] < 0 and gradient[idx + 1] >= 0:
+                tide_type = 'low'
+            else:
+                continue
+
+            # Parabolic interpolation for precise timing
+            h1, h2, h3 = heights_highres[idx - 1], heights_highres[idx], heights_highres[idx + 1]
+            t2 = time_offsets_hours_highres[idx]
+            dt = time_offsets_hours_highres[idx + 1] - t2
+
+            denom = (h1 - 2*h2 + h3)
+            if abs(denom) > 1e-10:
+                t_offset = 0.5 * (h1 - h3) / denom * dt
+                t_extremum = t2 + t_offset
+                height_m = float(h2 - 0.25 * (h1 - h3) * (h1 - h3) / denom)
+            else:
+                t_extremum = t2
+                height_m = float(h2)
+
+            event_time = start_time + timedelta(hours=float(t_extremum))
+            event_time = event_time.replace(microsecond=0)
+            height_ft = height_m * 3.28084
+
+            extrema_events.append({
+                'type': tide_type,
+                'datetime': event_time.isoformat(),
+                'height_m': round(height_m, 3),
+                'height_ft': round(height_ft, 3),
+                'datum': datum_used
+            })
+
+        # Sort extrema by time
+        extrema_events.sort(key=lambda x: x['datetime'])
+
+        return interval_heights, extrema_events

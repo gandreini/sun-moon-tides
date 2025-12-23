@@ -1,8 +1,18 @@
 # Sun Moon Tides
 
-Worldwide tide predictions and astronomy data (sunrise/sunset, moon phases) using the FES2022 ocean tide model.
+Sun Moon Tides ia a REST API for tide predictions and astronomy data that works anywhere in the world. Just provide latitude and longitude coordinates for any coastal location and get back accurate predictions.
 
-**Website:** https://sunmoontides.com
+The API provides three endpoints:
+
+- **`/api/v1/tides`** - High and low tide times with heights. Optionally returns tide heights at regular intervals (15, 30, or 60 minutes) for plotting tide curves. Supports different tidal datums (MSL, MLLW, LAT).
+
+- **`/api/v1/sun-moon`** - Daily sunrise and sunset times, civil dawn and dusk, moonrise and moonset times, moon phase name and illumination percentage.
+
+- **`/api/v1/sun-moon-tides`** - Combined endpoint that returns both tide and astronomy data in a single request.
+
+All times are automatically returned in the local timezone for the requested coordinates.
+
+**Use cases:** surf and fishing apps, marine navigation tools, coastal activity planning, photography apps (golden hour, moon phases), sailing and boating applications, beach safety information, scientific research, or any application that needs tide or sun/moon data without per-request API costs.
 
 ## Quick Start
 
@@ -20,22 +30,57 @@ API docs at http://localhost:8000/docs
 ```bash
 curl "http://localhost:8000/api/v1/tides?lat=34.03&lon=-118.68&days=7"
 ```
+Response:
+```json
+[
+  {"type": "low",  "datetime": "2025-12-22T03:26:34-08:00", "height_m": -0.083, "height_ft": -0.27, "datum": "msl"},
+  {"type": "high", "datetime": "2025-12-22T09:34:33-08:00", "height_m": 0.921,  "height_ft": 3.02,  "datum": "msl"},
+  {"type": "low",  "datetime": "2025-12-22T16:58:25-08:00", "height_m": -1.041, "height_ft": -3.42, "datum": "msl"}
+]
+```
 
 **Sun & Moon** - Get sunrise/sunset, moon phases:
 ```bash
 curl "http://localhost:8000/api/v1/sun-moon?lat=34.03&lon=-118.68&days=3"
+```
+Response:
+```json
+[
+  {
+    "date": "2025-12-23",
+    "civil_dawn": "2025-12-23T06:29:38-08:00",
+    "sunrise": "2025-12-23T06:57:26-08:00",
+    "sunset": "2025-12-23T16:50:09-08:00",
+    "civil_dusk": "2025-12-23T17:17:57-08:00",
+    "moonrise": "2025-12-23T09:46:57-08:00",
+    "moonset": "2025-12-23T19:19:14-08:00",
+    "moon_phase": "Waxing Crescent",
+    "moon_illumination": 18
+  }
+]
 ```
 
 **Combined** - Both in one call:
 ```bash
 curl "http://localhost:8000/api/v1/sun-moon-tides?lat=34.03&lon=-118.68&days=7"
 ```
-
-**Comparison** - Compare FES2022 predictions against other providers:
-```bash
-open http://localhost:8000/api/v1/comparison
+Response:
+```json
+{
+  "sun_moon": [{"date": "2025-12-23", "sunrise": "...", "sunset": "...", ...}],
+  "tides": [{"type": "high", "datetime": "...", "height_m": 0.92, ...}]
+}
 ```
-View HTML report comparing FES2022 against NOAA, WorldTides, and StormGlass for 17 global test locations.
+
+## Comparison Tool
+
+Visual dashboard comparing Sun Moon Tides predictions against other tide providers (NOAA, WorldTides, StormGlass) for 17 global locations:
+
+```
+http://localhost:8000/api/v1/comparison
+```
+
+Useful for evaluating accuracy in different regions.
 
 ## Python Usage
 
@@ -52,36 +97,99 @@ for tide in tides:
 ## Running Tests
 
 ```bash
-# Unit tests (fast, no internet)
-pytest tests/ -v -m "not comparison"
-
-# Comparison tests (vs NOAA/WorldTides/StormGlass)
-pytest tests/ -v -s -m comparison
-
-# All tests
 pytest tests/ -v
 ```
 
-For provider comparisons, add API keys to `.env`:
-```
-WORLDTIDES_API_KEY=your_key_here
-STORMGLASS_API_KEY=your_key_here
-```
-
-NOAA CO-OPS works without API key (US locations only).
-
-**Web-based comparison**: View live HTML comparison at http://localhost:8000/api/v1/comparison (server must be running).
-
 ## Data Requirements
 
-- `ocean_tide_extrapolated/` - FES2022 NetCDF files (required)
-- `load_tide/` - Load tide files (optional)
+This project requires FES2022 tidal constituent data files from AVISO:
+
+- `ocean_tide_extrapolated/` - FES2022 NetCDF files
+
+### How to Download FES2022 Data
+
+1. **Register on AVISO**: Go to [AVISO Registration](https://www.aviso.altimetry.fr/en/data/data-access/registration-form.html) and create an account. Select the product "FES (Finite Element Solution - Oceanic Tides Heights)".
+
+2. **Wait for approval**: After registration, you'll receive login credentials by email once your account is validated.
+
+3. **Download via FTP**: Connect to the AVISO FTP server using your credentials:
+   - **Host**: `ftp-access.aviso.altimetry.fr`
+   - **Protocol**: FTP or SFTP (port 2221 for SFTP)
+
+   Download this folder:
+   | Folder | FTP Path |
+   |--------|----------|
+   | `ocean_tide_extrapolated/` | `/auxiliary/tide_model/fes2022b/ocean_tide_extrapolated/` |
+
+4. **Place files in project**: Copy the downloaded folder to the project root directory:
+   ```
+   sun-moon-tides/
+   ├── ocean_tide_extrapolated/   <- (m2_fes2022.nc, s2_fes2022.nc, etc.)
+   ├── app/
+   ├── tests/
+   └── ...
+   ```
+
+The data is free for any use (including commercial) but requires [registration](https://www.aviso.altimetry.fr/en/data/data-access.html) and proper citation.
 
 ## Accuracy
 
-This is a **global physics-based model** (FES2022), not calibrated to local tide stations:
+This is a **global physics-based model**, not calibrated to local tide stations:
 - **Timing accuracy**: Typically ±10-30 minutes, but can be ±1-4 hours in complex coastal areas (harbors, bays, estuaries)
 - **Tidal range accuracy**: ±0.3m for consecutive high/low differences
 - **Known limitations**: Poor accuracy in areas with complex coastal geometry, shallow water effects, or strong local resonance
 
-The comparison endpoint shows where FES2022 works well vs. poorly by comparing against NOAA (US only, high accuracy) and commercial providers.
+Use the comparison tool to see where Sun Moon Tides works well vs. poorly for your region.
+
+## How Tides Work
+
+Tides are caused by the gravitational pull of the Moon and Sun on Earth's oceans. As the Earth rotates, different parts of the ocean are pulled toward these celestial bodies, creating the rise and fall we observe at coastlines.
+
+**The Moon's Role**: The Moon is the primary driver of tides. Even though the Sun is much larger, the Moon is much closer, making its gravitational effect on tides about twice as strong. This is why we typically see two high tides and two low tides each day (as the Earth rotates through the Moon's gravitational "bulge").
+
+**The Sun's Role**: The Sun modulates the Moon's effect. When the Sun and Moon align (new moon and full moon), their forces combine to create stronger "spring tides." When they're at right angles (quarter moons), we get weaker "neap tides."
+
+### How This Tool Calculates Tides
+
+Rather than trying to simulate ocean physics in real-time, tide prediction uses **harmonic analysis** - a technique developed over centuries of observation.
+
+**Tidal Constituents**: Scientists discovered that tides can be broken down into multiple overlapping waves, each caused by a specific astronomical cycle:
+
+| Constituent | Period | Cause |
+|------------|--------|-------|
+| M2 | 12.42 hours | Moon's gravity (main lunar) |
+| S2 | 12.00 hours | Sun's gravity (main solar) |
+| K1 | 23.93 hours | Moon's declination |
+| O1 | 25.82 hours | Moon's declination |
+| N2 | 12.66 hours | Moon's elliptical orbit |
+
+FES2022 uses **34 tidal constituents** to capture all major astronomical influences.
+
+**How Prediction Works**: For any location, we know:
+- **Amplitude**: How much each constituent affects that location (in cm)
+- **Phase**: When each constituent's cycle peaks at that location
+
+To predict the tide at any future time, we simply add up all these waves:
+
+```
+tide_height = Σ (amplitude × cos(frequency × time + phase))
+```
+
+This is why tide predictions can be accurate years in advance - they're based on predictable astronomical cycles.
+
+### About FES2022
+
+This service uses **FES2022** (Finite Element Solution 2022), a global ocean tide model developed by CNES (French space agency), LEGOS, NOVELTIS, and CLS.
+
+Key characteristics:
+- **Global coverage**: Works anywhere in the world's oceans
+- **High resolution**: 2-minute grid (~3.7 km at equator)
+- **34 tidal constituents**: Captures all major tidal frequencies
+- **Satellite-validated**: Built using 28 years of satellite altimetry data (1992-2020)
+- **11 million mesh elements**: 8x more detailed than the previous FES2014 model
+
+The model is physics-based and doesn't require local tide gauge calibration, which enables worldwide coverage but means predictions may be less precise than locally-calibrated services in complex coastal areas.
+
+For more technical details, see the [FES2022 handbook](https://www.aviso.altimetry.fr/fileadmin/documents/data/tools/hdbk_FES2022.pdf).
+
+The FES2022 Tide product was funded by CNES, produced by LEGOS, NOVELTIS and CLS and made freely available by AVISO.

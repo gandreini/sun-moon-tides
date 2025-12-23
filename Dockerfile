@@ -18,7 +18,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code and data
 COPY app/ ./app/
 COPY ocean_tide_extrapolated/ ./ocean_tide_extrapolated/
-COPY load_tide/ ./load_tide/
 COPY de421.bsp ./de421.bsp
 
 # Expose port

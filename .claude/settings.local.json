@@ -20,7 +20,9 @@
       "Bash(python -m uvicorn:*)",
       "Bash(curl:*)",
       "Bash(lsof:*)",
-      "Bash(xargs kill -9)"
+      "Bash(xargs kill -9)",
+      "Bash(pkill:*)",
+      "WebSearch"
     ]
   }
 }

@@ -1,18 +1,47 @@
+import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+from starlette.middleware.base import BaseHTTPMiddleware
+
+logger = logging.getLogger(__name__)
 
 from .astronomy_service import AstronomyService
 from .tide_service import FES2022TideService, TidalDatum
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        return response
+
 
 app = FastAPI(
     title="Sun Moon Tides API",
     description="Worldwide tide predictions and astronomy data using FES2022",
     version="2.0.0",
 )
+
+# Set up rate limiter
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Initialize services
 # Default to current directory for local dev, /data for Docker
@@ -61,9 +90,10 @@ async def get_tides(
             tides = tide_service.predict_tides(lat, lon, days, datum=datum_enum)
             return tides
         else:
-            # Return tide heights at regular intervals, with high/low events inserted at exact times
+            # Return tide heights at regular intervals, with high/low events at exact times
+            # Uses optimized method that computes the tide curve only once
             interval_int = int(interval)
-            heights = tide_service.get_tide_heights(
+            heights, events = tide_service.get_tides_with_extrema(
                 lat=lat,
                 lon=lon,
                 days=days,
@@ -71,15 +101,11 @@ async def get_tides(
                 datum=datum_enum,
             )
 
-            # Also get high/low tide events to insert at their exact times
-            events = tide_service.predict_tides(lat, lon, days, datum=datum_enum)
-
             # Combine heights and events, then sort by datetime
             combined = []
 
             # Add all interval heights (without type field)
             for height in heights:
-                # Create dict without type field for regular interval points
                 combined.append(
                     {
                         "datetime": height["datetime"],
@@ -114,8 +140,12 @@ async def get_tides(
             return combined
     except ValueError as e:
         raise HTTPException(400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(500, detail=str(e))
+        error_id = uuid.uuid4().hex[:8]
+        logger.exception(f"Error {error_id} in get_tides")
+        raise HTTPException(500, detail=f"Internal error (ref: {error_id})")
 
 
 @app.get("/api/v1/sun-moon")
@@ -162,8 +192,12 @@ async def get_sun_moon(
         )
 
         return astronomy_data
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(500, detail=str(e))
+        error_id = uuid.uuid4().hex[:8]
+        logger.exception(f"Error {error_id} in get_sun_moon")
+        raise HTTPException(500, detail=f"Internal error (ref: {error_id})")
 
 
 @app.get("/api/v1/sun-moon-tides")
@@ -236,8 +270,12 @@ async def get_sun_moon_tides(
         # Combine and return
         return {"sun_moon": astronomy_data, "tides": tides}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(500, detail=str(e))
+        error_id = uuid.uuid4().hex[:8]
+        logger.exception(f"Error {error_id} in get_sun_moon_tides")
+        raise HTTPException(500, detail=f"Internal error (ref: {error_id})")
 
 
 @app.get("/health")
@@ -246,7 +284,9 @@ async def health():
 
 
 @app.get("/api/v1/comparison", response_class=HTMLResponse)
+@limiter.limit("5/minute")
 async def get_comparison(
+    request: Request,
     days: int = Query(3, ge=1, le=7, description="Number of days to compare (1-7)"),
 ):
     """
@@ -260,6 +300,8 @@ async def get_comparison(
 
     Compares 17 global surf spots across 6 continents.
     Uses progressive loading to avoid memory/timeout issues.
+
+    Rate limited to 5 requests per minute per IP.
     """
     from .comparison import generate_comparison_shell_html
 
@@ -268,7 +310,9 @@ async def get_comparison(
 
 
 @app.get("/api/v1/comparison/location/{location_key}")
+@limiter.limit("60/minute")
 async def get_location_comparison(
+    request: Request,
     location_key: str,
     days: int = Query(3, ge=1, le=7, description="Number of days to compare (1-7)"),
 ):
@@ -277,15 +321,17 @@ async def get_location_comparison(
 
     Returns HTML fragment showing tide comparison for one location.
     Used by the progressive loading comparison page.
+
+    Rate limited to 60 requests per minute per IP (allows ~3 full page loads).
     """
-    import traceback
+    import html as html_module
     from .comparison import generate_single_location_html
 
     try:
-        html = generate_single_location_html(location_key, days)
-        return HTMLResponse(content=html)
+        html_content = generate_single_location_html(location_key, days)
+        return HTMLResponse(content=html_content)
     except Exception as e:
-        error_msg = f"Error for {location_key}: {str(e)}"
+        error_msg = html_module.escape(f"Error for {location_key}: {str(e)}")
         # Return error HTML fragment
         return HTMLResponse(
             content=f'<div class="location-section" style="background: #fee; padding: 20px; margin: 20px 0; border-radius: 8px;"><h2>Error loading {location_key}</h2><pre>{error_msg}</pre></div>',

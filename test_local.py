@@ -18,7 +18,6 @@ print(f"✓ Current directory: {os.getcwd()}")
 
 # Check if data folders exist
 ocean_path = './ocean_tide_extrapolated'
-load_path = './load_tide'
 
 print(f"\n📂 Checking data folders:")
 if os.path.exists(ocean_path):
@@ -27,12 +26,6 @@ if os.path.exists(ocean_path):
 else:
     print(f"  ✗ ocean_tide_extrapolated/ NOT FOUND")
     sys.exit(1)
-
-if os.path.exists(load_path):
-    nc_files = [f for f in os.listdir(load_path) if f.endswith('.nc')]
-    print(f"  ✓ load_tide/ found ({len(nc_files)} .nc files)")
-else:
-    print(f"  ⚠ load_tide/ NOT FOUND (optional)")
 
 # Try importing dependencies
 print(f"\n📦 Checking dependencies:")
