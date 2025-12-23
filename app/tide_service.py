@@ -404,6 +404,20 @@ class FES2022TideService:
     and performs harmonic analysis to predict tide heights at any location.
     """
     
+    # Constituents to use for predictions (ordered by importance)
+    CONSTITUENTS_TO_USE = [
+        # Primary constituents (largest amplitudes)
+        'm2', 's2', 'n2', 'k1', 'o1',
+        # Secondary semidiurnal
+        'k2', 'l2', 't2', '2n2', 'mu2', 'nu2',
+        # Secondary diurnal
+        'p1', 'q1', 'j1', 'oo1',
+        # Shallow water overtides (important for coastal areas)
+        'm4', 'ms4', 'mn4', 'm6', 'm3',
+        # Long period constituents (seasonal/monthly)
+        'mf', 'mm', 'ssa', 'sa',
+    ]
+
     # Major tide constituents and their frequencies (degrees per hour)
     CONSTITUENTS = {
         'm2': 28.9841042,   # Principal lunar semidiurnal
@@ -453,14 +467,56 @@ class FES2022TideService:
         """
         self.data_path = data_path
         self.ocean_path = os.path.join(data_path, 'ocean_tide_extrapolated')
-        
+
         # Cache for loaded NetCDF datasets
         self._datasets = {}
         self._grids = {}
-        
+
+        # Cache TimezoneFinder instance (loads data on first use)
+        self._tz_finder = TimezoneFinder()
+
         # Verify data directories exist
         if not os.path.exists(self.ocean_path):
             raise FileNotFoundError(f"Ocean tide data directory not found: {self.ocean_path}")
+
+    def _get_timezone(self, lat: float, lon: float, timezone_str: Optional[str] = None) -> ZoneInfo:
+        """
+        Get timezone for coordinates, with auto-detection if not specified.
+
+        Args:
+            lat: Latitude in degrees
+            lon: Longitude in degrees
+            timezone_str: Optional timezone string (e.g., 'America/Los_Angeles')
+
+        Returns:
+            ZoneInfo object for the timezone
+        """
+        if timezone_str is None:
+            timezone_str = self._tz_finder.timezone_at(lat=lat, lng=lon)
+            if timezone_str is None:
+                timezone_str = 'UTC'
+        try:
+            return ZoneInfo(timezone_str)
+        except (ValueError, KeyError):
+            return ZoneInfo('UTC')
+
+    def _load_constituents(self, lat: float, lon: float) -> Dict[str, Tuple[float, float]]:
+        """
+        Load tidal constituent data for a location.
+
+        Args:
+            lat: Latitude in degrees
+            lon: Longitude in degrees
+
+        Returns:
+            Dictionary mapping constituent names to (amplitude, phase) tuples
+        """
+        constituents = {}
+        for const in self.CONSTITUENTS_TO_USE:
+            amp, phase = self.get_constituent_data(const, lat, lon)
+            if amp > 0.001:  # Only include significant constituents
+                constituents[const] = (amp, phase)
+        return constituents
     
     def _get_dataset(self, constituent: str) -> Optional[Dataset]:
         """Load and cache NetCDF dataset for a constituent."""
@@ -473,7 +529,8 @@ class FES2022TideService:
                 ds = Dataset(ocean_file, 'r')
                 self._datasets[constituent] = ds
                 return ds
-            except Exception:
+            except (OSError, IOError, RuntimeError):
+                # NetCDF file exists but failed to open (corrupted, permissions, etc.)
                 pass
 
         return None
@@ -706,51 +763,22 @@ class FES2022TideService:
             - height_ft: Height in feet (relative to specified datum)
             - datum: The datum reference used for this prediction
         """
-        # Auto-detect timezone from coordinates if not provided
-        if timezone_str is None:
-            tf = TimezoneFinder()
-            timezone_str = tf.timezone_at(lat=lat, lng=lon)
-            if timezone_str is None:
-                timezone_str = 'UTC'
-
-        try:
-            tz = ZoneInfo(timezone_str)
-        except Exception:
-            tz = ZoneInfo('UTC')
+        # Get timezone (auto-detect from coordinates if not provided)
+        tz = self._get_timezone(lat, lon, timezone_str)
 
         # Get current time in the specified timezone
         now = datetime.now(tz)
         start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Generate time array (every 3 minutes for accurate extrema detection)
-        # Higher resolution improves timing accuracy by ~1-2 minutes
         num_points = days * 24 * 20  # 20 points per hour = 3 minute intervals
         time_offsets_hours = np.linspace(0, days * 24, num_points)
 
         # Create datetime objects for each time point
         datetimes = [start_time + timedelta(hours=float(h)) for h in time_offsets_hours]
 
-        # Get constituent data - expanded from 10 to 25 constituents for better accuracy
-        # Ordered by typical importance for tide prediction
-        constituents_to_use = [
-            # Primary constituents (largest amplitudes)
-            'm2', 's2', 'n2', 'k1', 'o1',
-            # Secondary semidiurnal
-            'k2', 'l2', 't2', '2n2', 'mu2', 'nu2',
-            # Secondary diurnal
-            'p1', 'q1', 'j1', 'oo1',
-            # Shallow water overtides (important for coastal areas)
-            'm4', 'ms4', 'mn4', 'm6', 'm3',
-            # Long period constituents (seasonal/monthly)
-            'mf', 'mm', 'ssa', 'sa',
-        ]
-        constituents = {}
-
-        for const in constituents_to_use:
-            amp, phase = self.get_constituent_data(const, lat, lon)
-            if amp > 0.001:  # Only include significant constituents
-                constituents[const] = (amp, phase)
-
+        # Load constituent data for this location
+        constituents = self._load_constituents(lat, lon)
         if not constituents:
             raise ValueError(f"No tide data available for location ({lat}, {lon})")
 
@@ -950,17 +978,8 @@ class FES2022TideService:
         if interval_minutes not in (15, 30, 60):
             raise ValueError("interval_minutes must be 15, 30, or 60")
 
-        # Auto-detect timezone from coordinates if not provided
-        if timezone_str is None:
-            tf = TimezoneFinder()
-            timezone_str = tf.timezone_at(lat=lat, lng=lon)
-            if timezone_str is None:
-                timezone_str = 'UTC'
-
-        try:
-            tz = ZoneInfo(timezone_str)
-        except Exception:
-            tz = ZoneInfo('UTC')
+        # Get timezone (auto-detect from coordinates if not provided)
+        tz = self._get_timezone(lat, lon, timezone_str)
 
         # Get current time in the specified timezone
         now = datetime.now(tz)
@@ -974,20 +993,8 @@ class FES2022TideService:
         # Create datetime objects for each time point
         datetimes = [start_time + timedelta(hours=float(h)) for h in time_offsets_hours]
 
-        # Get constituent data
-        constituents_to_use = [
-            'm2', 's2', 'n2', 'k1', 'o1',
-            'k2', 'l2', 't2', '2n2', 'mu2', 'nu2',
-            'p1', 'q1', 'j1', 'oo1',
-            'm4', 'ms4', 'mn4', 'm6', 'm3',
-            'mf', 'mm', 'ssa', 'sa',
-        ]
-        constituents = {}
-
-        for const in constituents_to_use:
-            amp, phase = self.get_constituent_data(const, lat, lon)
-            if amp > 0.001:
-                constituents[const] = (amp, phase)
+        # Load constituent data for this location
+        constituents = self._load_constituents(lat, lon)
 
         if not constituents:
             raise ValueError(f"No tide data available for location ({lat}, {lon})")
@@ -1053,43 +1060,20 @@ class FES2022TideService:
         if interval_minutes not in (15, 30, 60):
             raise ValueError("interval_minutes must be 15, 30, or 60")
 
-        # Auto-detect timezone from coordinates if not provided
-        if timezone_str is None:
-            tf = TimezoneFinder()
-            timezone_str = tf.timezone_at(lat=lat, lng=lon)
-            if timezone_str is None:
-                timezone_str = 'UTC'
-
-        try:
-            tz = ZoneInfo(timezone_str)
-        except Exception:
-            tz = ZoneInfo('UTC')
+        # Get timezone (auto-detect from coordinates if not provided)
+        tz = self._get_timezone(lat, lon, timezone_str)
 
         # Get current time in the specified timezone
         now = datetime.now(tz)
         start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Generate HIGH-RESOLUTION time array (3-minute intervals for accurate extrema)
-        # This is the same resolution used by predict_tides()
         num_points_highres = days * 24 * 20  # 20 points per hour = 3 minute intervals
         time_offsets_hours_highres = np.linspace(0, days * 24, num_points_highres)
         datetimes_highres = [start_time + timedelta(hours=float(h)) for h in time_offsets_hours_highres]
 
-        # Get constituent data (done once)
-        constituents_to_use = [
-            'm2', 's2', 'n2', 'k1', 'o1',
-            'k2', 'l2', 't2', '2n2', 'mu2', 'nu2',
-            'p1', 'q1', 'j1', 'oo1',
-            'm4', 'ms4', 'mn4', 'm6', 'm3',
-            'mf', 'mm', 'ssa', 'sa',
-        ]
-        constituents = {}
-
-        for const in constituents_to_use:
-            amp, phase = self.get_constituent_data(const, lat, lon)
-            if amp > 0.001:
-                constituents[const] = (amp, phase)
-
+        # Load constituent data for this location
+        constituents = self._load_constituents(lat, lon)
         if not constituents:
             raise ValueError(f"No tide data available for location ({lat}, {lon})")
 

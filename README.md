@@ -102,9 +102,12 @@ pytest tests/ -v
 
 ## Data Requirements
 
-This project requires FES2022 tidal constituent data files from AVISO:
+This project requires two data sources:
 
-- `ocean_tide_extrapolated/` - FES2022 NetCDF files
+- `ocean_tide_extrapolated/` - FES2022 tidal constituent files (for tide predictions)
+- `de421.bsp` - NASA JPL planetary ephemeris (for sun/moon calculations)
+
+The `de421.bsp` file (~17 MB) contains precise positions of the Sun, Moon, and planets. Skyfield downloads it automatically on first run, or you can download it manually from [NASA JPL](https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/).
 
 ### How to Download FES2022 Data
 

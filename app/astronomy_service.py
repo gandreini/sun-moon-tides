@@ -50,7 +50,7 @@ class AstronomyService:
 
         try:
             return ZoneInfo(timezone_str)
-        except Exception:
+        except (ValueError, KeyError):
             return ZoneInfo('UTC')
 
     def _get_time_range(self, date: datetime, days: int = 1) -> Tuple[Time, Time]:

@@ -4,12 +4,15 @@ Provider Comparison Module
 Compares FES2022 predictions against multiple commercial tide services
 and generates an HTML comparison report.
 """
+import logging
 import urllib.request
 import json
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import os
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -94,7 +97,7 @@ def fetch_noaa_tides(station_id: Optional[str], days: int = 3) -> Optional[List[
 
         return sorted(extrema, key=lambda x: x['datetime'])
     except Exception as e:
-        print(f"NOAA fetch failed: {e}")
+        logger.warning(f"NOAA fetch failed: {e}")
         return None
 
 
@@ -135,7 +138,7 @@ def fetch_worldtides_tides(lat: float, lon: float, days: int = 3) -> Optional[Li
 
         return sorted(extrema, key=lambda x: x['datetime'])
     except Exception as e:
-        print(f"WorldTides fetch failed: {e}")
+        logger.warning(f"WorldTides fetch failed: {e}")
         return None
 
 
@@ -178,7 +181,7 @@ def fetch_stormglass_tides(lat: float, lon: float, days: int = 3) -> Optional[Li
 
         return sorted(extrema, key=lambda x: x['datetime'])
     except Exception as e:
-        print(f"Storm Glass fetch failed: {e}")
+        logger.warning(f"Storm Glass fetch failed: {e}")
         return None
 
 

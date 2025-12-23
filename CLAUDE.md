@@ -18,9 +18,6 @@ pip install -r requirements.txt
 # Run development server locally
 uvicorn app.main:app --reload
 
-# Run interactive test script
-python test_local.py
-
 # Docker commands
 docker-compose up --build       # Build and start
 docker-compose up -d            # Run in background
