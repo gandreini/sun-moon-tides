@@ -24,13 +24,28 @@ uvicorn app.main:app --reload
 
 API docs at http://localhost:8000/docs
 
-## API Endpoints
+## API Reference
 
-**Tides** - Get high/low tide times:
+### GET `/api/v1/tides`
+
+Returns high/low tide predictions for a location.
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `lat` | float | yes | - | Latitude (-90 to 90) |
+| `lon` | float | yes | - | Longitude (-180 to 180) |
+| `days` | int | no | 7 | Number of days (1-30) |
+| `interval` | string | no | - | Return heights at intervals: `"15"`, `"30"`, or `"60"` minutes. If omitted, returns only high/low events. |
+| `datum` | string | no | `"msl"` | Tidal datum: `"msl"` (Mean Sea Level), `"mllw"` (Mean Lower Low Water), or `"lat"` (Lowest Astronomical Tide) |
+
+**Example:**
 ```bash
 curl "http://localhost:8000/api/v1/tides?lat=34.03&lon=-118.68&days=7"
 ```
-Response:
+
+**Response:**
 ```json
 [
   {"type": "low",  "datetime": "2025-12-22T03:26:34-08:00", "height_m": -0.083, "height_ft": -0.27, "datum": "msl"},
@@ -39,32 +54,68 @@ Response:
 ]
 ```
 
-**Sun & Moon** - Get sunrise/sunset, moon phases:
+---
+
+### GET `/api/v1/sun-moon`
+
+Returns sun and moon data for a location.
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `lat` | float | yes | - | Latitude (-90 to 90) |
+| `lon` | float | yes | - | Longitude (-180 to 180) |
+| `days` | int | no | 7 | Number of days (1-30) |
+| `date` | string | no | today | Start date in ISO format (YYYY-MM-DD) |
+
+**Example:**
 ```bash
 curl "http://localhost:8000/api/v1/sun-moon?lat=34.03&lon=-118.68&days=3"
 ```
-Response:
+
+**Response:**
 ```json
 [
   {
     "date": "2025-12-23",
     "civil_dawn": "2025-12-23T06:29:38-08:00",
     "sunrise": "2025-12-23T06:57:26-08:00",
+    "solar_noon": "2025-12-23T11:54:17-08:00",
     "sunset": "2025-12-23T16:50:09-08:00",
     "civil_dusk": "2025-12-23T17:17:57-08:00",
     "moonrise": "2025-12-23T09:46:57-08:00",
     "moonset": "2025-12-23T19:19:14-08:00",
     "moon_phase": "Waxing Crescent",
+    "moon_phase_angle": 44.3,
     "moon_illumination": 18
   }
 ]
 ```
 
-**Combined** - Both in one call:
+---
+
+### GET `/api/v1/sun-moon-tides`
+
+Returns both tide and sun/moon data in a single request.
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `lat` | float | yes | - | Latitude (-90 to 90) |
+| `lon` | float | yes | - | Longitude (-180 to 180) |
+| `days` | int | no | 7 | Number of days (1-30) |
+| `date` | string | no | today | Start date in ISO format (YYYY-MM-DD) |
+| `interval` | string | no | - | Return tide heights at intervals: `"15"`, `"30"`, or `"60"` minutes |
+| `datum` | string | no | `"msl"` | Tidal datum: `"msl"`, `"mllw"`, or `"lat"` |
+
+**Example:**
 ```bash
 curl "http://localhost:8000/api/v1/sun-moon-tides?lat=34.03&lon=-118.68&days=7"
 ```
-Response:
+
+**Response:**
 ```json
 {
   "sun_moon": [{"date": "2025-12-23", "sunrise": "...", "sunset": "...", ...}],

@@ -264,3 +264,113 @@ class TestTimezoneHandling:
             assert sunrise is not None, f"{name} should have sunrise"
             assert "+00:00" not in sunrise, \
                 f"{name} should NOT be in UTC, got: {sunrise}"
+
+
+class TestSunEventsDateConsistency:
+    """Tests to ensure all sun events are on the same calendar day."""
+
+    def _extract_date(self, iso_datetime: str) -> str:
+        """Extract the date portion (YYYY-MM-DD) from an ISO datetime string."""
+        if iso_datetime is None:
+            return None
+        return iso_datetime[:10]
+
+    def test_all_sun_events_same_day_pacific(self, service):
+        """All sun events should be on the same date for Pacific timezone locations.
+
+        This test catches a bug where UTC-based day boundaries caused events
+        to appear on different dates when converted to local timezone.
+        """
+        # Malibu, CA - Pacific time (-08:00 winter, -07:00 summer)
+        lat, lon = 34.03, -118.68
+        date = datetime(2023, 12, 24, tzinfo=timezone.utc)  # Winter (PST -08:00)
+
+        events = service.get_sun_events(lat, lon, date, days=1)
+        day = events[0]
+        expected_date = day["date"]
+
+        # All events should have the same date as the day's date field
+        event_fields = ["civil_dawn", "sunrise", "solar_noon", "sunset", "civil_dusk"]
+        for field in event_fields:
+            event_time = day[field]
+            if event_time is not None:
+                event_date = self._extract_date(event_time)
+                assert event_date == expected_date, (
+                    f"{field} date ({event_date}) doesn't match day date ({expected_date}). "
+                    f"Full value: {event_time}"
+                )
+
+    def test_all_sun_events_same_day_tokyo(self, service):
+        """All sun events should be on the same date for Tokyo timezone."""
+        # Tokyo - JST (+09:00)
+        lat, lon = 35.68, 139.69
+        date = datetime(2023, 12, 24, tzinfo=timezone.utc)
+
+        events = service.get_sun_events(lat, lon, date, days=1)
+        day = events[0]
+        expected_date = day["date"]
+
+        event_fields = ["civil_dawn", "sunrise", "solar_noon", "sunset", "civil_dusk"]
+        for field in event_fields:
+            event_time = day[field]
+            if event_time is not None:
+                event_date = self._extract_date(event_time)
+                assert event_date == expected_date, (
+                    f"{field} date ({event_date}) doesn't match day date ({expected_date}). "
+                    f"Full value: {event_time}"
+                )
+
+    def test_sun_events_chronological_order(self, service):
+        """Sun events should be in chronological order within the same day."""
+        # Test with multiple timezone offsets
+        test_locations = [
+            (34.03, -118.68, "Malibu (Pacific)"),
+            (35.68, 139.69, "Tokyo"),
+            (51.5, -0.12, "London"),
+            (-33.87, 151.21, "Sydney"),
+        ]
+
+        date = datetime(2023, 6, 21, tzinfo=timezone.utc)
+
+        for lat, lon, name in test_locations:
+            events = service.get_sun_events(lat, lon, date, days=1)
+            day = events[0]
+
+            # Get all non-None events in expected order
+            ordered_fields = ["civil_dawn", "sunrise", "solar_noon", "sunset", "civil_dusk"]
+            times = []
+            for field in ordered_fields:
+                if day[field] is not None:
+                    times.append((field, day[field]))
+
+            # Verify chronological order
+            for i in range(1, len(times)):
+                prev_field, prev_time = times[i-1]
+                curr_field, curr_time = times[i]
+                assert prev_time < curr_time, (
+                    f"{name}: {prev_field} ({prev_time}) should be before "
+                    f"{curr_field} ({curr_time})"
+                )
+
+    def test_multiple_days_each_day_consistent(self, service):
+        """Each day in a multi-day request should have consistent dates."""
+        lat, lon = 34.03, -118.68  # Malibu
+        date = datetime(2023, 12, 20, tzinfo=timezone.utc)
+        days = 7
+
+        events = service.get_sun_events(lat, lon, date, days=days)
+
+        assert len(events) == days
+
+        for day in events:
+            expected_date = day["date"]
+            event_fields = ["civil_dawn", "sunrise", "solar_noon", "sunset", "civil_dusk"]
+
+            for field in event_fields:
+                event_time = day[field]
+                if event_time is not None:
+                    event_date = self._extract_date(event_time)
+                    assert event_date == expected_date, (
+                        f"Day {expected_date}: {field} has wrong date ({event_date}). "
+                        f"Full value: {event_time}"
+                    )

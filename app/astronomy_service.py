@@ -138,9 +138,10 @@ class AstronomyService:
         for day_offset in range(days):
             day_date = date + timedelta(days=day_offset)
 
-            # Set midnight for this day
+            # Set midnight for this day IN LOCAL TIMEZONE (not UTC)
+            # This ensures we search for events within the local calendar day
             day_start = datetime(
-                day_date.year, day_date.month, day_date.day, tzinfo=timezone.utc
+                day_date.year, day_date.month, day_date.day, tzinfo=tz
             )
             day_end = day_start + timedelta(days=1)
 
@@ -231,9 +232,10 @@ class AstronomyService:
         for day_offset in range(days):
             day_date = date + timedelta(days=day_offset)
 
-            # Set midnight for this day
+            # Set midnight for this day IN LOCAL TIMEZONE (not UTC)
+            # This ensures we search for events within the local calendar day
             day_start = datetime(
-                day_date.year, day_date.month, day_date.day, tzinfo=timezone.utc
+                day_date.year, day_date.month, day_date.day, tzinfo=tz
             )
             day_end = day_start + timedelta(days=1)
 
