@@ -655,7 +655,7 @@ class FES2022TideService:
         constituents: Dict[str, Tuple[float, float]]
     ) -> np.ndarray:
         """
-        Calculate tide height using standard harmonic analysis formula.
+        Calculate tide height using standard harmonic analysis formula (vectorized).
 
         Uses the formula: h = Σ f * H * cos(V(t) + u - G)
         where:
@@ -678,59 +678,134 @@ class FES2022TideService:
         if not datetimes:
             return np.array([])
 
-        heights = np.zeros(len(datetimes))
+        n = len(datetimes)
 
-        for i, dt in enumerate(datetimes):
-            # Convert to UTC
-            if dt.tzinfo is not None:
-                dt_utc = dt.replace(tzinfo=None) - dt.utcoffset()
-            else:
-                dt_utc = dt
+        # Convert all datetimes to hours since first datetime (vectorized)
+        dt0 = datetimes[0]
+        if dt0.tzinfo is not None:
+            dt0_utc = dt0.replace(tzinfo=None) - dt0.utcoffset()
+        else:
+            dt0_utc = dt0
 
-            # Calculate Julian centuries and hour of day for this instant
-            T = _julian_centuries(dt_utc)
-            hour = dt_utc.hour + dt_utc.minute / 60.0 + dt_utc.second / 3600.0
+        # Calculate hours array from first datetime
+        hours_from_start = np.array([
+            (dt - dt0).total_seconds() / 3600.0 for dt in datetimes
+        ])
 
-            # Calculate astronomical arguments at this instant
-            astro = _astronomical_arguments(T, hour)
+        # Base hour of day for first datetime
+        base_hour = dt0_utc.hour + dt0_utc.minute / 60.0 + dt0_utc.second / 3600.0
 
-            # Get nodal corrections (slowly varying, computed at this instant)
-            nodal = _nodal_corrections(astro['N'], astro['p'])
+        # Hours of day for all points (mod 24 for hour angle calculation)
+        hours_of_day = (base_hour + hours_from_start) % 24.0
 
-            # Hour angle in degrees (15° per hour from midnight)
-            hour_angle = hour * 15.0
+        # Calculate Julian centuries for the midpoint (nodal corrections vary slowly)
+        mid_idx = n // 2
+        dt_mid = datetimes[mid_idx]
+        if dt_mid.tzinfo is not None:
+            dt_mid_utc = dt_mid.replace(tzinfo=None) - dt_mid.utcoffset()
+        else:
+            dt_mid_utc = dt_mid
+        T_mid = _julian_centuries(dt_mid_utc)
 
-            # Sum contributions from each constituent
-            for const_name, (amplitude, kappa) in constituents.items():
-                const = const_name.lower()
-                if const not in self.CONSTITUENTS:
-                    continue
+        # Calculate astronomical arguments at midpoint (they vary slowly over days)
+        astro_mid = _astronomical_arguments(T_mid, 12.0)  # Use noon for midpoint
 
-                # Get nodal corrections
-                f, u = nodal.get(const, (1.0, 0.0))
+        # Get nodal corrections once (they vary on 18.6-year cycle, essentially constant over days)
+        nodal = _nodal_corrections(astro_mid['N'], astro_mid['p'])
 
-                # Calculate equilibrium argument V at this instant
-                # V includes the time-varying component via τ = T + h - s
-                V = _equilibrium_argument(
-                    const,
-                    astro['s'], astro['h'], astro['p'],
-                    astro['N'], astro['pp'],
-                    hour_angle  # T = hour angle (Greenwich hour angle of mean sun)
-                )
+        # Diurnal constituents that need phase correction
+        diurnal_constituents = {'k1', 'o1', 'p1', 'q1', 'j1', 'm1', 'oo1', 'rho1', 's1'}
 
-                # FES2022 phase convention correction:
-                # Diurnal constituents (K1, O1, P1, Q1, J1, M1, OO1, RHO1, S1) need +180°
-                # This accounts for the phase convention difference between FES2022
-                # and standard harmonic prediction formulas
-                diurnal_constituents = {'k1', 'o1', 'p1', 'q1', 'j1', 'm1', 'oo1', 'rho1', 's1'}
-                kappa_corrected = kappa + 180.0 if const in diurnal_constituents else kappa
+        # Hour angles for all time points (degrees)
+        hour_angles = hours_of_day * 15.0
 
-                # Standard formula: h = f * H * cos(V + u - G)
-                # where G is Greenwich phase lag (kappa from FES2022)
-                phase_arg = V + u - kappa_corrected
+        # Calculate mean lunar time τ = T + h - s for all points
+        # T (hour angle) varies, h and s are nearly constant over the period
+        # Actually compute s, h, p, N, pp at each time step for accuracy
 
-                # Add harmonic contribution
-                heights[i] += f * amplitude * np.cos(np.radians(phase_arg))
+        # For better accuracy, compute T (Julian centuries) for each point
+        # T varies slowly, so we can interpolate
+        T_start = _julian_centuries(dt0_utc)
+        days_span = hours_from_start[-1] / 24.0 if len(hours_from_start) > 1 else 1.0
+        T_end_approx = T_start + days_span / 36525.0  # Approximate T at end
+
+        # Linear interpolation of T (Julian centuries change very slowly)
+        T_array = T_start + (hours_from_start / 24.0) / 36525.0
+
+        # Compute astronomical arguments for all times (vectorized)
+        # Mean longitude of Moon (s)
+        s_array = (218.3164591 + 481267.88134236 * T_array
+                   - 0.0013268 * T_array**2) % 360.0
+
+        # Mean longitude of Sun (h)
+        h_array = (280.46645 + 36000.76983 * T_array + 0.0003032 * T_array**2) % 360.0
+
+        # Mean lunar time: τ = T + h - s where T is hour angle
+        tau_array = hour_angles + h_array - s_array
+
+        # Initialize heights array
+        heights = np.zeros(n)
+
+        # Doodson coefficients (tau, s, h, p, N, pp, constant)
+        doodson = {
+            'm2':  (2, 0, 0, 0, 0, 0, 0),
+            's2':  (2, 2, -2, 0, 0, 0, 0),
+            'n2':  (2, -1, 0, 1, 0, 0, 0),
+            'k2':  (2, 2, 0, 0, 0, 0, 0),
+            '2n2': (2, -2, 0, 2, 0, 0, 0),
+            'mu2': (2, -2, 2, 0, 0, 0, 0),
+            'nu2': (2, -1, 2, -1, 0, 0, 0),
+            'l2':  (2, 1, 0, -1, 0, 0, 180),
+            't2':  (2, 2, -3, 0, 0, 1, 0),
+            'k1':  (1, 1, 0, 0, 0, 0, -90),
+            'o1':  (1, -1, 0, 0, 0, 0, 90),
+            'p1':  (1, 1, -2, 0, 0, 0, 90),
+            'q1':  (1, -2, 0, 1, 0, 0, 90),
+            'j1':  (1, 2, 0, -1, 0, 0, -90),
+            'm1':  (1, 0, 0, 0, 0, 0, -90),
+            'oo1': (1, 2, 0, 0, 0, 0, -90),
+            'rho1': (1, -2, 2, -1, 0, 0, 90),
+            's1':  (1, 1, -1, 0, 0, 0, 0),
+            'm4':  (4, 0, 0, 0, 0, 0, 0),
+            'ms4': (4, 2, -2, 0, 0, 0, 0),
+            'mn4': (4, -1, 0, 1, 0, 0, 0),
+            'm6':  (6, 0, 0, 0, 0, 0, 0),
+            'm3':  (3, 0, 0, 0, 0, 0, 0),
+            'mf':  (0, 2, 0, 0, 0, 0, 0),
+            'mm':  (0, 1, 0, -1, 0, 0, 0),
+            'ssa': (0, 0, 2, 0, 0, 0, 0),
+            'sa':  (0, 0, 1, 0, 0, 0, 0),
+        }
+
+        # Use midpoint values for slowly-varying arguments
+        p_mid = astro_mid['p']
+        N_mid = astro_mid['N']
+        pp_mid = astro_mid['pp']
+
+        # Sum contributions from each constituent (vectorized over time)
+        for const_name, (amplitude, kappa) in constituents.items():
+            const = const_name.lower()
+            if const not in self.CONSTITUENTS or const not in doodson:
+                continue
+
+            # Get nodal corrections (constant over prediction period)
+            f, u = nodal.get(const, (1.0, 0.0))
+
+            # Get Doodson coefficients
+            coef = doodson[const]
+
+            # Calculate equilibrium argument V for all times (vectorized)
+            V_array = (coef[0] * tau_array + coef[1] * s_array + coef[2] * h_array +
+                       coef[3] * p_mid + coef[4] * N_mid + coef[5] * pp_mid + coef[6]) % 360.0
+
+            # Apply diurnal phase correction
+            kappa_corrected = kappa + 180.0 if const in diurnal_constituents else kappa
+
+            # Phase argument for all times
+            phase_arg = V_array + u - kappa_corrected
+
+            # Add harmonic contribution (vectorized)
+            heights += f * amplitude * np.cos(np.radians(phase_arg))
 
         return heights
     
@@ -857,6 +932,64 @@ class FES2022TideService:
 
         return events
     
+    def _find_extrema_from_heights(
+        self,
+        heights: np.ndarray,
+        time_offsets_hours: np.ndarray,
+        start_time: datetime
+    ) -> List[Dict]:
+        """
+        Find high/low tide extrema from a heights array.
+
+        Internal helper method used by datum offset calculation to avoid recursion.
+
+        Args:
+            heights: Array of tide heights
+            time_offsets_hours: Array of time offsets in hours from start_time
+            start_time: Starting datetime
+
+        Returns:
+            List of extrema events with type, datetime, and height_m
+        """
+        events = []
+        gradient = np.gradient(heights)
+        sign_changes = np.where(np.diff(np.sign(gradient)))[0]
+
+        for idx in sign_changes:
+            if idx < 1 or idx >= len(heights) - 1:
+                continue
+
+            if gradient[idx] > 0 and gradient[idx + 1] <= 0:
+                tide_type = 'high'
+            elif gradient[idx] < 0 and gradient[idx + 1] >= 0:
+                tide_type = 'low'
+            else:
+                continue
+
+            # Parabolic interpolation for precise timing
+            h1, h2, h3 = heights[idx - 1], heights[idx], heights[idx + 1]
+            t2 = time_offsets_hours[idx]
+            dt = time_offsets_hours[idx + 1] - t2
+
+            denom = (h1 - 2*h2 + h3)
+            if abs(denom) > 1e-10:
+                t_offset = 0.5 * (h1 - h3) / denom * dt
+                t_extremum = t2 + t_offset
+                height_m = float(h2 - 0.25 * (h1 - h3) * (h1 - h3) / denom)
+            else:
+                t_extremum = t2
+                height_m = float(h2)
+
+            event_time = start_time + timedelta(hours=float(t_extremum))
+            events.append({
+                'type': tide_type,
+                'datetime': event_time.isoformat(),
+                'height_m': round(height_m, 3),
+            })
+
+        events.sort(key=lambda x: x['datetime'])
+        return events
+
     def _calculate_datum_offset(
         self,
         lat: float,
@@ -879,8 +1012,27 @@ class FES2022TideService:
         if target_datum == TidalDatum.MSL:
             return 0.0
 
-        # Get predictions in MSL to calculate the datum offset
-        events = self.predict_tides(lat, lon, days=days, timezone_str='UTC', datum=TidalDatum.MSL)
+        # Compute raw tide heights without calling predict_tides (avoids recursion)
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo('UTC')
+        now = datetime.now(tz)
+        start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Generate time array (every 3 minutes for accurate extrema detection)
+        num_points = days * 24 * 20  # 20 points per hour = 3 minute intervals
+        time_offsets_hours = np.linspace(0, days * 24, num_points)
+        datetimes = [start_time + timedelta(hours=float(h)) for h in time_offsets_hours]
+
+        # Load constituent data
+        constituents = self._load_constituents(lat, lon)
+        if not constituents:
+            return 0.0
+
+        # Calculate raw heights (MSL, no offset)
+        heights = self._calculate_harmonic_tide_at_times(datetimes, constituents)
+
+        # Find extrema
+        events = self._find_extrema_from_heights(heights, time_offsets_hours, start_time)
 
         if not events:
             return 0.0
@@ -896,25 +1048,17 @@ class FES2022TideService:
                     daily_lows[day].append(event['height_m'])
 
             if daily_lows:
-                lower_lows = [min(heights) for heights in daily_lows.values()]
+                lower_lows = [min(h) for h in daily_lows.values()]
                 mllw_level = np.mean(lower_lows)
-                # MLLW level is typically negative in MSL (e.g., -0.865m)
-                # To convert: height_MLLW = height_MSL - mllw_level
-                # If mllw_level = -0.865, then offset = -(-0.865) = +0.865
-                # So we return the negative of mllw_level to shift heights up
                 return -mllw_level
             else:
                 return 0.0
 
         elif target_datum == TidalDatum.LAT:
             # LAT: Lowest Astronomical Tide - the lowest tide predicted
-            # Use minimum of all low tides over the analysis period
             low_heights = [e['height_m'] for e in events if e['type'] == 'low']
             if low_heights:
                 lat_level = min(low_heights)
-                # LAT is the lowest point in MSL (most negative, e.g., -1.2m)
-                # To convert: height_LAT = height_MSL - lat_level
-                # If lat_level = -1.2, then offset = -(-1.2) = +1.2
                 return -lat_level
             else:
                 return 0.0
