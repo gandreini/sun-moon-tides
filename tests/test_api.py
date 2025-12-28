@@ -112,6 +112,21 @@ class TestTidesEndpoint:
         data = response.json()
         assert data[0]["datum"] == "lat"
 
+    def test_tides_with_date(self, client):
+        """Tides endpoint with specific start date."""
+        response = client.get("/api/v1/tides?lat=34.03&lon=-118.68&days=1&date=2025-06-15")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) > 0
+        # First tide should be on June 15, 2025
+        assert "2025-06-15" in data[0]["datetime"]
+
+    def test_tides_invalid_date(self, client):
+        """Tides endpoint should reject invalid date format."""
+        response = client.get("/api/v1/tides?lat=34.03&lon=-118.68&days=1&date=invalid")
+        assert response.status_code == 400
+        assert "Invalid date format" in response.json()["detail"]
+
     def test_tides_invalid_latitude(self, client):
         """Tides endpoint should reject invalid latitude."""
         response = client.get("/api/v1/tides?lat=100&lon=-118.68&days=1")
@@ -123,8 +138,8 @@ class TestTidesEndpoint:
         assert response.status_code == 422
 
     def test_tides_invalid_days(self, client):
-        """Tides endpoint should reject days > 30."""
-        response = client.get("/api/v1/tides?lat=34.03&lon=-118.68&days=31")
+        """Tides endpoint should reject days > 365."""
+        response = client.get("/api/v1/tides?lat=34.03&lon=-118.68&days=366")
         assert response.status_code == 422
 
     def test_tides_missing_lat(self, client):

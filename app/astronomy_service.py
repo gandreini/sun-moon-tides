@@ -115,6 +115,8 @@ class AstronomyService:
         """
         Calculate sun events for the given location and date range.
 
+        Uses batched Skyfield calculations for better performance.
+
         Args:
             lat: Latitude in degrees
             lon: Longitude in degrees
@@ -125,73 +127,63 @@ class AstronomyService:
         Returns:
             List of dictionaries containing sun events for each day
         """
-        t0, t1 = self._get_time_range(date, days)
         tz = self._get_timezone(lat, lon, timezone_str)
-
-        # Create location object
         location = wgs84.latlon(lat, lon)
 
-        # Define event types
-        sun_events = []
+        # Calculate date range in local timezone
+        start_local = datetime(date.year, date.month, date.day, tzinfo=tz)
+        end_local = start_local + timedelta(days=days)
 
-        # Loop through each day in the range
+        # Convert to Skyfield time objects for the full range
+        t0 = self.ts.from_datetime(start_local)
+        t1 = self.ts.from_datetime(end_local)
+
+        # BATCHED: Get all sunrise/sunset events in one call
+        f_sun = almanac.sunrise_sunset(self.eph, location)
+        sun_times, sun_events_arr = almanac.find_discrete(t0, t1, f_sun)
+
+        # BATCHED: Get all civil dawn/dusk events in one call
+        civil_func = self._get_degrees_function(location, -6.0)
+        civil_times, civil_events_arr = almanac.find_discrete(t0, t1, civil_func)
+
+        # Initialize results for each day
+        results = []
         for day_offset in range(days):
             day_date = date + timedelta(days=day_offset)
-
-            # Set midnight for this day IN LOCAL TIMEZONE (not UTC)
-            # This ensures we search for events within the local calendar day
-            day_start = datetime(
-                day_date.year, day_date.month, day_date.day, tzinfo=tz
-            )
-            day_end = day_start + timedelta(days=1)
-
-            # Convert to Skyfield time objects
-            day_t0 = self.ts.from_datetime(day_start)
-            day_t1 = self.ts.from_datetime(day_end)
-
-            # Get sunrise and sunset
-            f = almanac.sunrise_sunset(self.eph, location)
-            times, events = almanac.find_discrete(day_t0, day_t1, f)
-
-            # Get civil dawn and dusk (sun 6° below horizon)
-            # Define a function that returns True when the sun is above -6°
-            civil_twilight_func = self._get_degrees_function(location, -6.0)
-
-            # Find times when this function changes value
-            civil_times, civil_events = almanac.find_discrete(
-                day_t0, day_t1, civil_twilight_func
-            )
-
-            # Prepare events for this day
-            day_result = {
-                "date": day_start.strftime("%Y-%m-%d"),
+            day_str = datetime(day_date.year, day_date.month, day_date.day, tzinfo=tz).strftime("%Y-%m-%d")
+            results.append({
+                "date": day_str,
                 "civil_dawn": None,
                 "sunrise": None,
                 "solar_noon": None,
                 "sunset": None,
                 "civil_dusk": None,
-            }
+            })
 
-            # Process sunrise/sunset
-            for time, event in zip(times, events):
+        # Group sunrise/sunset events by day
+        for time, event in zip(sun_times, sun_events_arr):
+            dt = time.utc_datetime().astimezone(tz)
+            day_idx = (dt.date() - date.date()).days
+            if 0 <= day_idx < days:
                 if event == 1:  # Sunrise
-                    day_result["sunrise"] = self._format_time(time, tz)
+                    results[day_idx]["sunrise"] = self._format_time(time, tz)
                 else:  # Sunset
-                    day_result["sunset"] = self._format_time(time, tz)
+                    results[day_idx]["sunset"] = self._format_time(time, tz)
 
-            # Process civil dawn/dusk
-            dawn_found = False
-            dusk_found = False
+        # Group civil dawn/dusk events by day
+        for time, event in zip(civil_times, civil_events_arr):
+            dt = time.utc_datetime().astimezone(tz)
+            day_idx = (dt.date() - date.date()).days
+            if 0 <= day_idx < days:
+                if event:  # Civil dawn
+                    if results[day_idx]["civil_dawn"] is None:
+                        results[day_idx]["civil_dawn"] = self._format_time(time, tz)
+                else:  # Civil dusk
+                    if results[day_idx]["civil_dusk"] is None:
+                        results[day_idx]["civil_dusk"] = self._format_time(time, tz)
 
-            for time, event in zip(civil_times, civil_events):
-                if event and not dawn_found:  # Civil dawn (night to day)
-                    day_result["civil_dawn"] = self._format_time(time, tz)
-                    dawn_found = True
-                elif not event and not dusk_found:  # Civil dusk (day to night)
-                    day_result["civil_dusk"] = self._format_time(time, tz)
-                    dusk_found = True
-
-            # Calculate solar noon
+        # Calculate solar noon for each day
+        for day_result in results:
             if day_result["sunrise"] and day_result["sunset"]:
                 sunrise_dt = datetime.fromisoformat(day_result["sunrise"])
                 sunset_dt = datetime.fromisoformat(day_result["sunset"])
@@ -199,9 +191,7 @@ class AstronomyService:
                 noon = noon.replace(microsecond=0)
                 day_result["solar_noon"] = noon.isoformat()
 
-            sun_events.append(day_result)
-
-        return sun_events
+        return results
 
     def get_moon_events(
         self, lat: float, lon: float, date: datetime, days: int = 1,
@@ -209,6 +199,8 @@ class AstronomyService:
     ) -> List[Dict[str, Any]]:
         """
         Calculate moon events for the given location and date range.
+
+        Uses batched Skyfield calculations for better performance.
 
         Args:
             lat: Latitude in degrees
@@ -220,61 +212,55 @@ class AstronomyService:
         Returns:
             List of dictionaries containing moon events for each day
         """
-        t0, t1 = self._get_time_range(date, days)
         tz = self._get_timezone(lat, lon, timezone_str)
-
-        # Create location object
         location = wgs84.latlon(lat, lon)
 
-        moon_events = []
+        # Calculate date range in local timezone
+        start_local = datetime(date.year, date.month, date.day, tzinfo=tz)
+        end_local = start_local + timedelta(days=days)
 
-        # Loop through each day in the range
+        # Convert to Skyfield time objects for the full range
+        t0 = self.ts.from_datetime(start_local)
+        t1 = self.ts.from_datetime(end_local)
+
+        # BATCHED: Get all moonrise/moonset events in one call
+        f_moon = almanac.risings_and_settings(self.eph, self.moon, location)
+        moon_times, moon_events_arr = almanac.find_discrete(t0, t1, f_moon)
+
+        # Initialize results for each day with phase data
+        results = []
         for day_offset in range(days):
             day_date = date + timedelta(days=day_offset)
-
-            # Set midnight for this day IN LOCAL TIMEZONE (not UTC)
-            # This ensures we search for events within the local calendar day
-            day_start = datetime(
-                day_date.year, day_date.month, day_date.day, tzinfo=tz
-            )
-            day_end = day_start + timedelta(days=1)
-
-            # Convert to Skyfield time objects
-            day_t0 = self.ts.from_datetime(day_start)
-            day_t1 = self.ts.from_datetime(day_end)
-
-            # Get moon rise and set
-            f_moon = almanac.risings_and_settings(self.eph, self.moon, location)
-            moon_times, moon_events_list = almanac.find_discrete(day_t0, day_t1, f_moon)
+            day_start = datetime(day_date.year, day_date.month, day_date.day, tzinfo=tz)
 
             # Calculate moon phase for midnight
             midnight_time = self.ts.from_datetime(day_start)
             moon_phase_value = almanac.moon_phase(self.eph, midnight_time).degrees
             phase_name = self._get_moon_phase_name(moon_phase_value)
-
-            # Calculate illumination
             phase_percent = self._get_moon_illumination(moon_phase_value)
 
-            # Prepare events for this day
-            day_result = {
+            results.append({
                 "date": day_start.strftime("%Y-%m-%d"),
                 "moonrise": None,
                 "moonset": None,
                 "phase": phase_name,
                 "phase_angle": round(moon_phase_value, 1),
                 "illumination": phase_percent,
-            }
+            })
 
-            # Process moonrise/moonset
-            for time, event in zip(moon_times, moon_events_list):
+        # Group moonrise/moonset events by day
+        for time, event in zip(moon_times, moon_events_arr):
+            dt = time.utc_datetime().astimezone(tz)
+            day_idx = (dt.date() - date.date()).days
+            if 0 <= day_idx < days:
                 if event == 1:  # Moonrise
-                    day_result["moonrise"] = self._format_time(time, tz)
+                    if results[day_idx]["moonrise"] is None:
+                        results[day_idx]["moonrise"] = self._format_time(time, tz)
                 else:  # Moonset
-                    day_result["moonset"] = self._format_time(time, tz)
+                    if results[day_idx]["moonset"] is None:
+                        results[day_idx]["moonset"] = self._format_time(time, tz)
 
-            moon_events.append(day_result)
-
-        return moon_events
+        return results
 
     def _get_moon_phase_name(self, angle: float) -> str:
         """

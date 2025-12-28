@@ -56,7 +56,11 @@ astronomy_service = AstronomyService()
 async def get_tides(
     lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
     lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
-    days: int = Query(7, ge=1, le=30, description="Number of days to predict"),
+    days: int = Query(7, ge=1, le=365, description="Number of days to predict"),
+    date: Optional[str] = Query(
+        None,
+        description="Optional start date (YYYY-MM-DD). If not provided, current date is used.",
+    ),
     interval: Optional[Literal["15", "30", "60"]] = Query(
         None,
         description="Optional interval in minutes (15, 30, or 60). If not provided, returns only high/low tides.",
@@ -82,12 +86,24 @@ async def get_tides(
     - With interval=15: Returns 96 readings/day with high/low labels
     """
     try:
+        # Parse date or use None for current date
+        start_date = None
+        if date:
+            try:
+                start_date = datetime.fromisoformat(date)
+                if start_date.tzinfo is None:
+                    start_date = start_date.replace(tzinfo=timezone.utc)
+            except ValueError:
+                raise HTTPException(
+                    400, "Invalid date format. Please use ISO 8601 format (YYYY-MM-DD)"
+                )
+
         # Convert datum string to enum
         datum_enum = TidalDatum(datum)
 
         if interval is None:
             # Return high/low tide events only
-            tides = tide_service.predict_tides(lat, lon, days, datum=datum_enum)
+            tides = tide_service.predict_tides(lat, lon, days, datum=datum_enum, start_date=start_date)
             return tides
         else:
             # Return tide heights at regular intervals, with high/low events at exact times
@@ -99,6 +115,7 @@ async def get_tides(
                 days=days,
                 interval_minutes=interval_int,
                 datum=datum_enum,
+                start_date=start_date,
             )
 
             # Combine heights and events, then sort by datetime
@@ -152,7 +169,7 @@ async def get_tides(
 async def get_sun_moon(
     lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
     lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
-    days: int = Query(7, ge=1, le=30, description="Number of days to predict (1-30)"),
+    days: int = Query(7, ge=1, le=365, description="Number of days to predict (1-365)"),
     date: Optional[str] = Query(
         None,
         description="Optional start date (YYYY-MM-DD). If not provided, current date is used.",
@@ -204,7 +221,7 @@ async def get_sun_moon(
 async def get_sun_moon_tides(
     lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
     lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
-    days: int = Query(7, ge=1, le=30, description="Number of days to predict (1-30)"),
+    days: int = Query(7, ge=1, le=365, description="Number of days to predict (1-365)"),
     date: Optional[str] = Query(
         None,
         description="Optional start date (YYYY-MM-DD). If not provided, current date is used.",

@@ -816,7 +816,8 @@ class FES2022TideService:
         days: int = 7,
         timezone_str: Optional[str] = None,
         datum: TidalDatum = TidalDatum.MSL,
-        datum_offset: Optional[float] = None
+        datum_offset: Optional[float] = None,
+        start_date: Optional[datetime] = None
     ) -> List[Dict]:
         """
         Predict tide events (high and low tides) for a given location.
@@ -829,6 +830,7 @@ class FES2022TideService:
             datum: Tidal datum reference (MSL, MLLW, or LAT). Default is MSL.
             datum_offset: Optional manual offset in meters (overrides datum parameter if provided).
                          Deprecated: use datum parameter instead.
+            start_date: Optional start date. If not provided, uses current date.
 
         Returns:
             List of tide event dictionaries with keys:
@@ -841,9 +843,16 @@ class FES2022TideService:
         # Get timezone (auto-detect from coordinates if not provided)
         tz = self._get_timezone(lat, lon, timezone_str)
 
-        # Get current time in the specified timezone
-        now = datetime.now(tz)
-        start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Use provided start_date or current date
+        if start_date is not None:
+            # Use the date portion in local timezone (ignore time/tz from input)
+            start_time = datetime(
+                start_date.year, start_date.month, start_date.day,
+                hour=0, minute=0, second=0, microsecond=0, tzinfo=tz
+            )
+        else:
+            now = datetime.now(tz)
+            start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Generate time array (every 3 minutes for accurate extrema detection)
         num_points = days * 24 * 20  # 20 points per hour = 3 minute intervals
@@ -1093,7 +1102,8 @@ class FES2022TideService:
         interval_minutes: int = 30,
         timezone_str: Optional[str] = None,
         datum: TidalDatum = TidalDatum.MSL,
-        datum_offset: Optional[float] = None
+        datum_offset: Optional[float] = None,
+        start_date: Optional[datetime] = None
     ) -> List[Dict]:
         """
         Get tide heights at regular intervals (tide curve data).
@@ -1110,6 +1120,7 @@ class FES2022TideService:
             datum: Tidal datum reference (MSL, MLLW, or LAT). Default is MSL.
             datum_offset: Optional manual offset in meters (overrides datum parameter if provided).
                          Deprecated: use datum parameter instead.
+            start_date: Optional start date. If not provided, uses current date.
 
         Returns:
             List of dictionaries with keys:
@@ -1125,9 +1136,16 @@ class FES2022TideService:
         # Get timezone (auto-detect from coordinates if not provided)
         tz = self._get_timezone(lat, lon, timezone_str)
 
-        # Get current time in the specified timezone
-        now = datetime.now(tz)
-        start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Use provided start_date or current date
+        if start_date is not None:
+            # Use the date portion in local timezone (ignore time/tz from input)
+            start_time = datetime(
+                start_date.year, start_date.month, start_date.day,
+                hour=0, minute=0, second=0, microsecond=0, tzinfo=tz
+            )
+        else:
+            now = datetime.now(tz)
+            start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Generate time array at requested intervals
         points_per_hour = 60 // interval_minutes
@@ -1180,6 +1198,7 @@ class FES2022TideService:
         interval_minutes: int = 30,
         timezone_str: Optional[str] = None,
         datum: TidalDatum = TidalDatum.MSL,
+        start_date: Optional[datetime] = None,
     ) -> Tuple[List[Dict], List[Dict]]:
         """
         Get both tide heights at intervals AND high/low extrema from a single computation.
@@ -1194,6 +1213,7 @@ class FES2022TideService:
             interval_minutes: Time between readings (15, 30, or 60 minutes)
             timezone_str: Timezone string or None for auto-detect
             datum: Tidal datum reference (MSL, MLLW, or LAT)
+            start_date: Optional start date. If not provided, uses current date.
 
         Returns:
             Tuple of (interval_heights, extrema_events):
@@ -1207,9 +1227,16 @@ class FES2022TideService:
         # Get timezone (auto-detect from coordinates if not provided)
         tz = self._get_timezone(lat, lon, timezone_str)
 
-        # Get current time in the specified timezone
-        now = datetime.now(tz)
-        start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Use provided start_date or current date
+        if start_date is not None:
+            # Use the date portion in local timezone (ignore time/tz from input)
+            start_time = datetime(
+                start_date.year, start_date.month, start_date.day,
+                hour=0, minute=0, second=0, microsecond=0, tzinfo=tz
+            )
+        else:
+            now = datetime.now(tz)
+            start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Generate HIGH-RESOLUTION time array (3-minute intervals for accurate extrema)
         num_points_highres = days * 24 * 20  # 20 points per hour = 3 minute intervals
