@@ -57,7 +57,7 @@ async def get_tides(
     lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
     lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
     days: int = Query(7, ge=1, le=365, description="Number of days to predict"),
-    date: Optional[str] = Query(
+    start_date: Optional[str] = Query(
         None,
         description="Optional start date (YYYY-MM-DD). If not provided, current date is used.",
     ),
@@ -86,13 +86,13 @@ async def get_tides(
     - With interval=15: Returns 96 readings/day with high/low labels
     """
     try:
-        # Parse date or use None for current date
-        start_date = None
-        if date:
+        # Parse start_date or use None for current date
+        parsed_start_date = None
+        if start_date:
             try:
-                start_date = datetime.fromisoformat(date)
-                if start_date.tzinfo is None:
-                    start_date = start_date.replace(tzinfo=timezone.utc)
+                parsed_start_date = datetime.fromisoformat(start_date)
+                if parsed_start_date.tzinfo is None:
+                    parsed_start_date = parsed_start_date.replace(tzinfo=timezone.utc)
             except ValueError:
                 raise HTTPException(
                     400, "Invalid date format. Please use ISO 8601 format (YYYY-MM-DD)"
@@ -103,7 +103,7 @@ async def get_tides(
 
         if interval is None:
             # Return high/low tide events only
-            tides = tide_service.predict_tides(lat, lon, days, datum=datum_enum, start_date=start_date)
+            tides = tide_service.predict_tides(lat, lon, days, datum=datum_enum, start_date=parsed_start_date)
             return tides
         else:
             # Return tide heights at regular intervals, with high/low events at exact times
@@ -115,7 +115,7 @@ async def get_tides(
                 days=days,
                 interval_minutes=interval_int,
                 datum=datum_enum,
-                start_date=start_date,
+                start_date=parsed_start_date,
             )
 
             # Combine heights and events, then sort by datetime
@@ -170,7 +170,7 @@ async def get_sun_moon(
     lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
     lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
     days: int = Query(7, ge=1, le=365, description="Number of days to predict (1-365)"),
-    date: Optional[str] = Query(
+    start_date: Optional[str] = Query(
         None,
         description="Optional start date (YYYY-MM-DD). If not provided, current date is used.",
     ),
@@ -188,24 +188,24 @@ async def get_sun_moon(
     All times are returned in ISO 8601 format with local timezone.
     """
     try:
-        # Parse date or use current date
-        if date:
+        # Parse start_date or use current date
+        if start_date:
             try:
-                start_date = datetime.fromisoformat(date)
+                parsed_start_date = datetime.fromisoformat(start_date)
                 # If no timezone provided, assume UTC
-                if start_date.tzinfo is None:
-                    start_date = start_date.replace(tzinfo=timezone.utc)
+                if parsed_start_date.tzinfo is None:
+                    parsed_start_date = parsed_start_date.replace(tzinfo=timezone.utc)
             except ValueError:
                 raise HTTPException(
                     400, "Invalid date format. Please use ISO 8601 format (YYYY-MM-DD)"
                 )
         else:
             # Use current date in UTC
-            start_date = datetime.now(timezone.utc)
+            parsed_start_date = datetime.now(timezone.utc)
 
         # Get astronomical data
         astronomy_data = astronomy_service.get_all_astronomical_info(
-            lat, lon, start_date, days
+            lat, lon, parsed_start_date, days
         )
 
         return astronomy_data
@@ -222,7 +222,7 @@ async def get_sun_moon_tides(
     lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
     lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
     days: int = Query(7, ge=1, le=365, description="Number of days to predict (1-365)"),
-    date: Optional[str] = Query(
+    start_date: Optional[str] = Query(
         None,
         description="Optional start date (YYYY-MM-DD). If not provided, current date is used.",
     ),
@@ -246,20 +246,20 @@ async def get_sun_moon_tides(
     All times are returned in ISO 8601 format with local timezone.
     """
     try:
-        # Parse date or use current date
-        if date:
+        # Parse start_date or use current date
+        if start_date:
             try:
-                start_date = datetime.fromisoformat(date)
+                parsed_start_date = datetime.fromisoformat(start_date)
                 # If no timezone provided, assume UTC
-                if start_date.tzinfo is None:
-                    start_date = start_date.replace(tzinfo=timezone.utc)
+                if parsed_start_date.tzinfo is None:
+                    parsed_start_date = parsed_start_date.replace(tzinfo=timezone.utc)
             except ValueError:
                 raise HTTPException(
                     400, "Invalid date format. Please use ISO 8601 format (YYYY-MM-DD)"
                 )
         else:
             # Use current date in UTC
-            start_date = datetime.now(timezone.utc)
+            parsed_start_date = datetime.now(timezone.utc)
 
         # Convert datum string to enum
         datum_enum = TidalDatum(datum)
@@ -267,7 +267,7 @@ async def get_sun_moon_tides(
         # Get tide data
         if interval is None:
             # Return high/low tide events only
-            tides = tide_service.predict_tides(lat, lon, days, datum=datum_enum)
+            tides = tide_service.predict_tides(lat, lon, days, datum=datum_enum, start_date=parsed_start_date)
         else:
             # Return tide heights at regular intervals
             interval_int = int(interval)
@@ -277,11 +277,12 @@ async def get_sun_moon_tides(
                 days=days,
                 interval_minutes=interval_int,
                 datum=datum_enum,
+                start_date=parsed_start_date,
             )
 
         # Get astronomy data
         astronomy_data = astronomy_service.get_all_astronomical_info(
-            lat, lon, start_date, days
+            lat, lon, parsed_start_date, days
         )
 
         # Combine and return

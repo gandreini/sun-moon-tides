@@ -114,7 +114,7 @@ class TestTidesEndpoint:
 
     def test_tides_with_date(self, client):
         """Tides endpoint with specific start date."""
-        response = client.get("/api/v1/tides?lat=34.03&lon=-118.68&days=1&date=2025-06-15")
+        response = client.get("/api/v1/tides?lat=34.03&lon=-118.68&days=1&start_date=2025-06-15")
         assert response.status_code == 200
         data = response.json()
         assert len(data) > 0
@@ -123,7 +123,7 @@ class TestTidesEndpoint:
 
     def test_tides_invalid_date(self, client):
         """Tides endpoint should reject invalid date format."""
-        response = client.get("/api/v1/tides?lat=34.03&lon=-118.68&days=1&date=invalid")
+        response = client.get("/api/v1/tides?lat=34.03&lon=-118.68&days=1&start_date=invalid")
         assert response.status_code == 400
         assert "Invalid date format" in response.json()["detail"]
 
@@ -192,14 +192,14 @@ class TestSunMoonEndpoint:
 
     def test_sun_moon_with_date(self, client):
         """Sun-moon endpoint should accept date parameter."""
-        response = client.get("/api/v1/sun-moon?lat=34.03&lon=-118.68&days=1&date=2024-06-21")
+        response = client.get("/api/v1/sun-moon?lat=34.03&lon=-118.68&days=1&start_date=2024-06-21")
         assert response.status_code == 200
         data = response.json()
         assert data[0]["date"] == "2024-06-21"
 
     def test_sun_moon_invalid_date(self, client):
         """Sun-moon endpoint should reject invalid date format."""
-        response = client.get("/api/v1/sun-moon?lat=34.03&lon=-118.68&days=1&date=invalid")
+        response = client.get("/api/v1/sun-moon?lat=34.03&lon=-118.68&days=1&start_date=invalid")
         # Returns 500 because HTTPException is caught by outer except
         assert response.status_code in [400, 500]
         assert "date" in response.json()["detail"].lower()
@@ -273,16 +273,21 @@ class TestSunMoonTidesEndpoint:
         assert data["tides"][0]["datum"] == "mllw"
 
     def test_combined_with_date(self, client):
-        """Combined endpoint should support date parameter."""
-        response = client.get("/api/v1/sun-moon-tides?lat=34.03&lon=-118.68&days=1&date=2024-06-21")
+        """Combined endpoint should support date parameter for both sun_moon and tides."""
+        response = client.get("/api/v1/sun-moon-tides?lat=34.03&lon=-118.68&days=1&start_date=2024-06-21")
         assert response.status_code == 200
         data = response.json()
 
+        # Verify sun_moon respects start_date
         assert data["sun_moon"][0]["date"] == "2024-06-21"
+
+        # Verify tides also respects start_date (this was a bug - tides ignored start_date)
+        assert len(data["tides"]) > 0
+        assert "2024-06-21" in data["tides"][0]["datetime"]
 
     def test_combined_invalid_date(self, client):
         """Combined endpoint should reject invalid date."""
-        response = client.get("/api/v1/sun-moon-tides?lat=34.03&lon=-118.68&days=1&date=bad")
+        response = client.get("/api/v1/sun-moon-tides?lat=34.03&lon=-118.68&days=1&start_date=bad")
         # Returns 500 because HTTPException is caught by outer except
         assert response.status_code in [400, 500]
         assert "date" in response.json()["detail"].lower()

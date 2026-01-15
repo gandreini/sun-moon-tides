@@ -120,6 +120,12 @@ Returns HTML page comparing FES2022 against NOAA, WorldTides, and StormGlass for
 - Extrema detection uses gradient zero-crossings with 3-minute resolution + parabolic interpolation
 - Datum offset can be applied to convert MSL to chart datum
 
+## API Debugging Tips
+
+- **Parameter naming**: FastAPI silently ignores unknown query parameters. If a parameter seems to be ignored, verify the exact parameter name in the endpoint definition matches what callers are sending.
+
+- **Combined endpoints**: When an endpoint calls multiple services (like `/api/v1/sun-moon-tides`), verify that shared parameters like `start_date` are passed to ALL service calls, not just some. Easy to miss when adding a new parameter.
+
 ## Accuracy Notes
 
 This is a **global physics-based model** (FES2022), not calibrated to local tide stations:

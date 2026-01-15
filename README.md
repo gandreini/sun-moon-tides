@@ -37,7 +37,7 @@ Returns high/low tide predictions for a location.
 | `lat` | float | yes | - | Latitude (-90 to 90) |
 | `lon` | float | yes | - | Longitude (-180 to 180) |
 | `days` | int | no | 7 | Number of days (1-365) |
-| `date` | string | no | today | Start date in ISO format (YYYY-MM-DD) |
+| `start_date` | string | no | today | Start date in ISO format (YYYY-MM-DD) |
 | `interval` | string | no | - | Return heights at intervals: `"15"`, `"30"`, or `"60"` minutes. If omitted, returns only high/low events. |
 | `datum` | string | no | `"msl"` | Tidal datum: `"msl"` (Mean Sea Level), `"mllw"` (Mean Lower Low Water), or `"lat"` (Lowest Astronomical Tide) |
 
@@ -68,7 +68,7 @@ Returns sun and moon data for a location.
 | `lat` | float | yes | - | Latitude (-90 to 90) |
 | `lon` | float | yes | - | Longitude (-180 to 180) |
 | `days` | int | no | 7 | Number of days (1-365) |
-| `date` | string | no | today | Start date in ISO format (YYYY-MM-DD) |
+| `start_date` | string | no | today | Start date in ISO format (YYYY-MM-DD) |
 
 **Example:**
 ```bash
@@ -107,7 +107,7 @@ Returns both tide and sun/moon data in a single request.
 | `lat` | float | yes | - | Latitude (-90 to 90) |
 | `lon` | float | yes | - | Longitude (-180 to 180) |
 | `days` | int | no | 7 | Number of days (1-365) |
-| `date` | string | no | today | Start date in ISO format (YYYY-MM-DD) |
+| `start_date` | string | no | today | Start date in ISO format (YYYY-MM-DD) |
 | `interval` | string | no | - | Return tide heights at intervals: `"15"`, `"30"`, or `"60"` minutes |
 | `datum` | string | no | `"msl"` | Tidal datum: `"msl"`, `"mllw"`, or `"lat"` |
 
