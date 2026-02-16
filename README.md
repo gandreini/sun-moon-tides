@@ -1,6 +1,6 @@
 # Sun Moon Tides
 
-Sun Moon Tides ia a REST API for tide predictions and astronomy data that works anywhere in the world. Just provide latitude and longitude coordinates for any coastal location and get back accurate predictions.
+Sun Moon Tides is a REST API for tide predictions and astronomy data that works anywhere in the world. Just provide latitude and longitude coordinates for any point in the ocean and get back accurate predictions.
 
 The API provides three endpoints:
 
