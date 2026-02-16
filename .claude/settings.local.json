@@ -22,7 +22,9 @@
       "Bash(lsof:*)",
       "Bash(xargs kill -9)",
       "Bash(pkill:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(time curl:*)",
+      "Bash(time python3:*)"
     ]
   }
 }
