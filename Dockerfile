@@ -29,5 +29,19 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=10s \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"
 
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application via gunicorn (uvicorn workers) to get a per-request
+# --timeout killer that bare uvicorn lacks, plus periodic worker recycling
+# to mitigate memory creep in cached FES2022 NetCDF datasets.
+# --workers 3 matches the assumption in the WordPress caller at
+# mondosurf theme: src/Helper/class-forecast-app-helper.php:836
+# (batch_size = 3; // Match tide-app's 3 uvicorn workers)
+CMD ["gunicorn", "app.main:app", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--workers", "3", \
+     "--bind", "0.0.0.0:8000", \
+     "--timeout", "60", \
+     "--graceful-timeout", "30", \
+     "--keep-alive", "5", \
+     "--max-requests", "1000", \
+     "--max-requests-jitter", "100", \
+     "--access-logfile", "-"]
