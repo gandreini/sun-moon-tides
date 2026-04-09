@@ -128,13 +128,16 @@ class NativeGridReader:
         # Return (amplitude_m, phase_deg)
 ```
 
-**Memory footprint estimate:**
-- Geometry (lon, lat, triangle, lgp2): ~500 MB
-- 34 constituents × 2 (amp, phase) × 90 MB per array ≈ 6.1 GB
-- KD-tree + adjacency: ~500 MB
-- **Total: ~7 GB RAM**
+**Memory footprint (validated by Phase 0 spike):**
+- Geometry (lon, lat, triangle, lgp2): 490 MB
+- KD-tree + vertex-to-triangle adjacency: ~550 MB
+- 34 constituents × 2 (amp, phase) × 90 MB per array (float32, native format): ~6.1 GB
+- App + OS overhead: ~500 MB
+- **Total: ~7.6 GB RAM**
 
-If this proves too much for deployment, we can subset by bounding box or use `float32` instead of `float64` to halve memory.
+**Server requirement:** The current 4 GB droplet is insufficient. A ≥16 GB server is required to load all 34 constituents and guarantee quality. User has committed to upgrading server RAM rather than compromising on data quality.
+
+**No compromises:** Full 34 constituents, full global coverage, no bbox subsetting, no precision reduction.
 
 This keeps the grid reading/interpolation separate from the harmonic synthesis, making it testable in isolation.
 
