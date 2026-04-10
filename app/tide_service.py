@@ -305,9 +305,32 @@ def _nodal_corrections(N: float, p: float) -> Dict[str, Tuple[float, float]]:
     f_mm = (2.0/3.0 - sinI**2) / 0.5021
     corrections['mm'] = (abs(f_mm), 0.0)
 
-    # Default for remaining constituents (solar or negligible nodal effect)
-    for const in ['ssa', 'sa', 'msf', 'm8', 's4', 's1',
-                  'eps2', 'lambda2', 'mks2', 'r2', 'msqm', 'mtm']:
+    # Eps2 - lunar semidiurnal family (same as M2)
+    corrections['eps2'] = (f_m2, u_m2)
+
+    # Lambda2 - lunar semidiurnal family (same as M2)
+    corrections['lambda2'] = (f_m2, u_m2)
+
+    # MKS2 - shallow water compound (M2 * K2 / S2 ≈ M2-like)
+    corrections['mks2'] = (f_m2, u_m2)
+
+    # N4 - shallow water quarter-diurnal (2*N2 ≈ M2^2)
+    corrections['n4'] = (f_m2**2, 2 * u_m2)
+
+    # M8 - shallow water eighth-diurnal
+    corrections['m8'] = (f_m2**4, 4 * u_m2)
+
+    # MSf - lunisolar synodic fortnightly (long period, Mf-like)
+    corrections['msf'] = (f_mf, u_mf)
+
+    # MSqm - lunisolar synodic fortnightly (long period, Mf-like)
+    corrections['msqm'] = (f_mf, u_mf)
+
+    # Mtm - lunisolar fortnightly (long period, Mf-like)
+    corrections['mtm'] = (f_mf, u_mf)
+
+    # Solar and near-solar constituents (no nodal correction)
+    for const in ['ssa', 'sa', 's4', 's1', 'r2', 't2']:
         if const not in corrections:
             corrections[const] = (1.0, 0.0)
 
@@ -352,7 +375,7 @@ def _equilibrium_argument(const: str, s: float, h: float, p: float, N: float, pp
         'l2':  (2, 1, 0, -1, 0, 0, 180),   # 2τ + s - p + 180°
         't2':  (2, 2, -3, 0, 0, 1, 0),     # 2T - h + pp
         'lambda2': (2, 1, -2, 1, 0, 0, 180), # 2τ + s - 2h + p + 180°
-        'eps2': (2, -2, 0, 2, 0, 0, 0),    # Same as 2N2
+        'eps2': (2, -3, 2, 1, 0, 0, 0),    # 2τ - 3s + 2h + p
 
         # Diurnal
         'k1':  (1, 1, 0, 0, 0, 0, -90),    # τ + s - 90° = T + h - 90°
@@ -374,6 +397,7 @@ def _equilibrium_argument(const: str, s: float, h: float, p: float, N: float, pp
         's4':  (4, 4, -4, 0, 0, 0, 0),     # 4T
         'm3':  (3, 0, 0, 0, 0, 0, 0),      # 3τ
         'mks2': (2, 2, 0, 0, 0, 0, 0),     # Same as K2
+        'n4':  (4, -2, 0, 2, 0, 0, 0),     # 4τ - 2s + 2p
         'r2':  (2, 2, -1, 0, 0, -1, 0),    # 2T + h - pp
 
         # Long period
@@ -404,18 +428,18 @@ class FES2022TideService:
     and performs harmonic analysis to predict tide heights at any location.
     """
     
-    # Constituents to use for predictions (ordered by importance)
+    # Constituents to use for predictions — all 34 from FES2022b native grid
     CONSTITUENTS_TO_USE = [
         # Primary constituents (largest amplitudes)
         'm2', 's2', 'n2', 'k1', 'o1',
         # Secondary semidiurnal
-        'k2', 'l2', 't2', '2n2', 'mu2', 'nu2',
+        'k2', 'l2', 't2', '2n2', 'mu2', 'nu2', 'eps2', 'lambda2', 'r2',
         # Secondary diurnal
-        'p1', 'q1', 'j1', 'oo1',
+        'p1', 'q1', 'j1', 's1',
         # Shallow water overtides (important for coastal areas)
-        'm4', 'ms4', 'mn4', 'm6', 'm3',
+        'm4', 'ms4', 'mn4', 'mks2', 'n4', 'm6', 'm8', 'm3', 's4',
         # Long period constituents (seasonal/monthly)
-        'mf', 'mm', 'ssa', 'sa',
+        'mf', 'mm', 'msf', 'msqm', 'mtm', 'ssa', 'sa',
     ]
 
     # Major tide constituents and their frequencies (degrees per hour)
@@ -454,6 +478,7 @@ class FES2022TideService:
         'lambda2': 29.4556253, # Smaller lunar evectional
         'mks2': 30.6265120, # Shallow water compound
         'r2': 30.0410667,   # Smaller solar elliptic
+        'n4': 56.8794590,   # Shallow water quarter-diurnal (2*N2)
         'msqm': 1.0158958,  # Lunisolar synodic fortnightly
         'mtm': 1.0980331,   # Lunisolar fortnightly
     }
