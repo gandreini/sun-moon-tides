@@ -2,10 +2,27 @@
 API endpoint tests for FastAPI application.
 """
 
+import os
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
+DEFAULT_GRID_DIR = Path(
+    "/Users/giulioandreini/Documents/Obsidian/Mondo/projects/sun-moon-tides-fes2022b"
+)
+GRID_DATA_DIR = Path(os.environ.get("FES_DATA_PATH", DEFAULT_GRID_DIR))
+GRID_FILE = GRID_DATA_DIR / "FES2022b_OceanTide_NSgrid.nc"
+
+pytest.importorskip("scipy")
+if not GRID_FILE.exists():
+    pytest.skip(f"Native grid file not found: {GRID_FILE}", allow_module_level=True)
+
+os.environ.setdefault("FES_DATA_PATH", str(GRID_DATA_DIR))
+
 from app.main import app
+
+pytestmark = pytest.mark.requires_grid
 
 
 @pytest.fixture
@@ -263,6 +280,7 @@ class TestSunMoonTidesEndpoint:
 
         # With interval, tides should have more entries
         assert len(data["tides"]) >= 24
+        assert any(tide.get("type") in {"high", "low"} for tide in data["tides"])
 
     def test_combined_with_datum(self, client):
         """Combined endpoint should support datum parameter."""
@@ -305,7 +323,7 @@ class TestGlobalLocations:
         ("Los Angeles", 34.03, -118.68),
         ("Sydney", -33.87, 151.21),
         ("Tokyo", 35.68, 139.69),
-        ("London", 51.5, -0.12),
+        ("Newquay", 50.415, -5.075),
         ("Cape Town", -33.92, 18.42),
     ])
     def test_tides_global_locations(self, client, name, lat, lon):

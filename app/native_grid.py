@@ -6,7 +6,7 @@ and performs LGP2 quadratic interpolation at arbitrary query points.
 
 The native grid provides significantly better coastal resolution than the cartesian
 grid (500m-4km vs 3.7km uniform), particularly in harbors, estuaries, and shallow
-bays where the current cartesian interpolation produces timing errors of 1-4 hours.
+bays where the previous cartesian interpolation produced timing errors of 1-4 hours.
 
 Key design choices:
 - All data is loaded into memory at startup for zero per-request disk I/O
@@ -215,6 +215,9 @@ class NativeGridReader:
         _, vertex_indices = self._vertex_tree.query([query_lon, query_lat], k=k)
         if np.isscalar(vertex_indices):
             vertex_indices = np.array([vertex_indices])
+        vertex_indices = vertex_indices[vertex_indices < len(self._lon)]
+        if len(vertex_indices) == 0:
+            return np.empty(0, dtype=np.int32)
 
         # Gather all triangles touching these vertices via CSR adjacency
         starts = self._vertex_tri_starts[vertex_indices]
@@ -364,6 +367,41 @@ class NativeGridReader:
         amplitude_m = amp_cm / 100.0  # FES2022 stores amplitudes in centimeters
         phase_deg = float(np.rad2deg(pha_rad) % 360.0)
         return amplitude_m, phase_deg
+
+    def get_constituents_data(
+        self, constituents: List[str], lat: float, lon: float
+    ) -> Dict[str, Tuple[float, float]]:
+        """Get multiple constituents at a point with one geometry lookup.
+
+        Returns a dictionary keyed by lower-case constituent name. Invalid,
+        missing, or masked constituents are omitted.
+        """
+        keys = [constituent.lower() for constituent in constituents]
+
+        # Normalize longitude to the grid's convention (-180 to 180)
+        qlon = ((lon + 180.0) % 360.0) - 180.0
+        qlat = lat
+
+        tri_idx, bary = self._find_triangle(qlon, qlat)
+        result: Dict[str, Tuple[float, float]] = {}
+
+        for key in keys:
+            if key not in self._amplitudes:
+                continue
+
+            if tri_idx is not None:
+                amp_cm, pha_rad = self._interpolate_at_triangle(key, tri_idx, bary)
+            else:
+                # Coastline fallback is rare; keep the existing per-constituent
+                # validity behavior for masked nearest vertices.
+                amp_cm, pha_rad = self._value_at_nearest_vertex(key, qlon, qlat)
+
+            if np.isnan(amp_cm) or np.isnan(pha_rad):
+                continue
+
+            result[key] = (amp_cm / 100.0, float(np.rad2deg(pha_rad) % 360.0))
+
+        return result
 
     @property
     def constituents(self) -> List[str]:

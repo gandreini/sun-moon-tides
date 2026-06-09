@@ -1,16 +1,37 @@
 """
 Unit tests for FES2022 Tide Service
 """
+import os
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 import re
-from app.tide_service import FES2022TideService, TidalDatum
+
+pytest.importorskip("scipy")
+
+import numpy as np
+
+from app.tide_service import DOODSON_COEFFICIENTS, FES2022TideService, TidalDatum
+
+DEFAULT_GRID_DIR = Path(
+    "/Users/giulioandreini/Documents/Obsidian/Mondo/projects/sun-moon-tides-fes2022b"
+)
+GRID_DATA_DIR = Path(os.environ.get("FES_DATA_PATH", DEFAULT_GRID_DIR))
+GRID_FILE = GRID_DATA_DIR / "FES2022b_OceanTide_NSgrid.nc"
+
+pytestmark = [
+    pytest.mark.requires_grid,
+    pytest.mark.skipif(
+        not GRID_FILE.exists(),
+        reason=f"Native grid file not found: {GRID_FILE}",
+    ),
+]
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def service():
     """Create a tide service instance for testing."""
-    return FES2022TideService(data_path='./')
+    return FES2022TideService(data_path=str(GRID_DATA_DIR))
 
 
 class TestTideServiceInitialization:
@@ -19,7 +40,9 @@ class TestTideServiceInitialization:
     def test_service_initializes(self, service):
         """Service should initialize without errors."""
         assert service is not None
-        assert service.ocean_path.endswith('ocean_tide_extrapolated')
+        assert service.data_path == str(GRID_DATA_DIR)
+        assert service._grid is not None
+        assert len(service._grid.constituents) == 34
 
     def test_service_fails_with_invalid_path(self):
         """Service should raise error with invalid data path."""
@@ -29,6 +52,10 @@ class TestTideServiceInitialization:
 
 class TestConstituentData:
     """Tests for reading tide constituent data."""
+
+    def test_all_loaded_constituents_have_doodson_coefficients(self):
+        """Every requested FES constituent should participate in harmonic synthesis."""
+        assert set(FES2022TideService.CONSTITUENTS_TO_USE).issubset(DOODSON_COEFFICIENTS)
 
     def test_get_m2_constituent(self, service):
         """Should read M2 constituent data for valid coordinates."""
@@ -68,8 +95,10 @@ class TestLongitudeConversion:
         """Same location with different lon formats should give same result."""
         # 241.32 is equivalent to -118.68 in 0-360 format
         amp1, phase1 = service.get_constituent_data('m2', 34.03, -118.68)
-        # The service should handle this internally
+        amp2, phase2 = service.get_constituent_data('m2', 34.03, 241.32)
         assert amp1 > 0
+        assert abs(amp1 - amp2) < 0.001
+        assert abs(phase1 - phase2) < 0.1
 
 
 class TestTidePrediction:
@@ -179,7 +208,12 @@ class TestTimezoneDetection:
     @pytest.mark.parametrize("name,lat,lon,expected_offset", TIMEZONE_TESTS)
     def test_timezone_detection(self, service, name, lat, lon, expected_offset):
         """Timezone should be correctly detected from coordinates."""
-        tides = service.predict_tides(lat=lat, lon=lon, days=1)
+        tides = service.predict_tides(
+            lat=lat,
+            lon=lon,
+            days=1,
+            start_date=datetime(2025, 1, 15),
+        )
         if tides:
             dt = tides[0]['datetime']
             actual_offset = dt[-6:]  # Last 6 chars are timezone offset
@@ -190,7 +224,8 @@ class TestTimezoneDetection:
         """Explicit timezone should override auto-detection."""
         tides = service.predict_tides(
             lat=34.03, lon=-118.68, days=1,
-            timezone_str='Europe/London'
+            timezone_str='Europe/London',
+            start_date=datetime(2025, 12, 15),
         )
         if tides:
             dt = tides[0]['datetime']
@@ -346,6 +381,35 @@ class TestTidalDatum:
             assert t1['type'] == t2['type']
             assert t1['datetime'] == t2['datetime']
             assert abs(t1['height_m'] - t2['height_m']) < 0.001
+
+    def test_datum_offset_uses_requested_start_time(self):
+        """Datum offsets should be calculated for the requested prediction window."""
+        service = FES2022TideService.__new__(FES2022TideService)
+        requested_start = datetime(2027, 5, 4, 15, 30, tzinfo=timezone.utc)
+        captured = {}
+
+        service._load_constituents = lambda lat, lon: {'m2': (1.0, 0.0)}
+
+        def fake_harmonic(datetimes, constituents):
+            captured['first_datetime'] = datetimes[0]
+            hours = np.array([
+                (dt - datetimes[0]).total_seconds() / 3600.0
+                for dt in datetimes
+            ])
+            return np.cos(2 * np.pi * hours / 12.0)
+
+        service._calculate_harmonic_tide_at_times = fake_harmonic
+
+        offset = service._calculate_datum_offset(
+            lat=34.03,
+            lon=-118.68,
+            target_datum=TidalDatum.MLLW,
+            days=2,
+            start_time=requested_start,
+        )
+
+        assert captured['first_datetime'] == datetime(2027, 5, 4, tzinfo=timezone.utc)
+        assert offset > 0
 
     def test_all_datums_preserve_tidal_range(self, service):
         """Tidal range (difference between high and low) should be same regardless of datum."""

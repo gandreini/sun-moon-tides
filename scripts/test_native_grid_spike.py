@@ -196,7 +196,7 @@ def get_constituent_at_point(ds, constituent, tri_idx, bary, lgp2_conn):
     return amp_m, pha_interp
 
 
-def test_location(name, lat, lon_deg, ds, vertex_tree, vertex_to_tri, grid_lon, grid_lat, tri, lgp2_conn):
+def run_location_check(name, lat, lon_deg, ds, vertex_tree, vertex_to_tri, grid_lon, grid_lat, tri, lgp2_conn):
     """Test constituent interpolation at a location."""
     print(f"\n--- {name} (lat={lat}, lon={lon_deg}) ---")
 
@@ -240,9 +240,9 @@ def main():
     vertex_tree, vertex_to_tri, index_time = build_spatial_index(lon, lat, tri)
 
     # Step 4: Test locations
-    test_location("Trieste (Adriatic)", *TRIESTE, ds, vertex_tree, vertex_to_tri, lon, lat, tri, lgp2_conn)
-    test_location("Pipeline (Hawaii)", *HAWAII, ds, vertex_tree, vertex_to_tri, lon, lat, tri, lgp2_conn)
-    test_location("Land (Alps)", *LAND_POINT, ds, vertex_tree, vertex_to_tri, lon, lat, tri, lgp2_conn)
+    run_location_check("Trieste (Adriatic)", *TRIESTE, ds, vertex_tree, vertex_to_tri, lon, lat, tri, lgp2_conn)
+    run_location_check("Pipeline (Hawaii)", *HAWAII, ds, vertex_tree, vertex_to_tri, lon, lat, tri, lgp2_conn)
+    run_location_check("Land (Alps)", *LAND_POINT, ds, vertex_tree, vertex_to_tri, lon, lat, tri, lgp2_conn)
 
     # Step 5: Load a constituent to estimate per-constituent memory
     t0 = time.time()

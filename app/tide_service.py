@@ -7,7 +7,7 @@ at any coastal location worldwide.
 
 Key features:
 - Worldwide coverage (anywhere with ocean tide data)
-- Uses 24 tidal constituents for accuracy
+- Uses all 34 FES2022b tidal constituents for accuracy
 - Automatic timezone detection from coordinates
 - Parabolic interpolation for precise extrema timing
 
@@ -26,9 +26,8 @@ References:
 """
 import os
 import numpy as np
-from netCDF4 import Dataset
 from datetime import datetime, timedelta
-from typing import List, Dict, Tuple, Optional, Literal
+from typing import List, Dict, Tuple, Optional
 from enum import Enum
 
 try:
@@ -37,6 +36,8 @@ except ImportError:
     from backports.zoneinfo import ZoneInfo
 
 from timezonefinder import TimezoneFinder
+
+from .native_grid import NativeGridReader
 
 
 class TidalDatum(str, Enum):
@@ -337,87 +338,52 @@ def _nodal_corrections(N: float, p: float) -> Dict[str, Tuple[float, float]]:
     return corrections
 
 
-def _equilibrium_argument(const: str, s: float, h: float, p: float, N: float, pp: float, T: float) -> float:
-    """
-    Calculate equilibrium argument (V0) for a tidal constituent.
-    Based on Doodson numbers and Schureman conventions.
-
-    The equilibrium argument V0 is the phase of the tide-generating force
-    at Greenwich at time T=0 of the prediction period.
-
-    Args:
-        const: Constituent name (lowercase)
-        s: Mean longitude of Moon (degrees)
-        h: Mean longitude of Sun (degrees)
-        p: Mean longitude of lunar perigee (degrees)
-        N: Mean longitude of lunar ascending node (degrees)
-        pp: Mean longitude of solar perigee (degrees)
-        T: Hour angle (tau = hour * 15 degrees)
-
-    Returns:
-        V0 in degrees
-    """
-    # Doodson coefficients for each constituent
+DOODSON_COEFFICIENTS: Dict[str, Tuple[int, int, int, int, int, int, int]] = {
     # Format: (tau, s, h, p, N, pp, constant)
     # tau = T + h - s (hour angle of mean moon)
+    'm2':  (2, 0, 0, 0, 0, 0, 0),
+    's2':  (2, 2, -2, 0, 0, 0, 0),
+    'n2':  (2, -1, 0, 1, 0, 0, 0),
+    'k2':  (2, 2, 0, 0, 0, 0, 0),
+    '2n2': (2, -2, 0, 2, 0, 0, 0),
+    'mu2': (2, -2, 2, 0, 0, 0, 0),
+    'nu2': (2, -1, 2, -1, 0, 0, 0),
+    'l2':  (2, 1, 0, -1, 0, 0, 180),
+    't2':  (2, 2, -3, 0, 0, 1, 0),
+    'lambda2': (2, 1, -2, 1, 0, 0, 180),
+    'eps2': (2, -3, 2, 1, 0, 0, 0),
+    'k1':  (1, 1, 0, 0, 0, 0, -90),
+    'o1':  (1, -1, 0, 0, 0, 0, 90),
+    'p1':  (1, 1, -2, 0, 0, 0, 90),
+    'q1':  (1, -2, 0, 1, 0, 0, 90),
+    'j1':  (1, 2, 0, -1, 0, 0, -90),
+    'm1':  (1, 0, 0, 0, 0, 0, -90),
+    'oo1': (1, 2, 0, 0, 0, 0, -90),
+    'rho1': (1, -2, 2, -1, 0, 0, 90),
+    's1':  (1, 1, -1, 0, 0, 0, 0),
+    'm4':  (4, 0, 0, 0, 0, 0, 0),
+    'ms4': (4, 2, -2, 0, 0, 0, 0),
+    'mn4': (4, -1, 0, 1, 0, 0, 0),
+    'm6':  (6, 0, 0, 0, 0, 0, 0),
+    'm8':  (8, 0, 0, 0, 0, 0, 0),
+    's4':  (4, 4, -4, 0, 0, 0, 0),
+    'm3':  (3, 0, 0, 0, 0, 0, 0),
+    'mks2': (2, 2, 0, 0, 0, 0, 0),
+    'n4':  (4, -2, 0, 2, 0, 0, 0),
+    'r2':  (2, 2, -1, 0, 0, -1, 0),
+    'mf':  (0, 2, 0, 0, 0, 0, 0),
+    'mm':  (0, 1, 0, -1, 0, 0, 0),
+    'ssa': (0, 0, 2, 0, 0, 0, 0),
+    'sa':  (0, 0, 1, 0, 0, 0, 0),
+    'msf': (0, 2, -2, 0, 0, 0, 0),
+    'msqm': (0, 2, -2, 0, 0, 0, 0),
+    'mtm': (0, 3, 0, -1, 0, 0, 0),
+}
 
-    tau = T + h - s  # Mean lunar time
 
-    doodson = {
-        # Semidiurnal
-        'm2':  (2, 0, 0, 0, 0, 0, 0),      # 2τ
-        's2':  (2, 2, -2, 0, 0, 0, 0),     # 2τ + 2s - 2h = 2T
-        'n2':  (2, -1, 0, 1, 0, 0, 0),     # 2τ - s + p
-        'k2':  (2, 2, 0, 0, 0, 0, 0),      # 2τ + 2s = 2T + 2h
-        '2n2': (2, -2, 0, 2, 0, 0, 0),     # 2τ - 2s + 2p
-        'mu2': (2, -2, 2, 0, 0, 0, 0),     # 2τ - 2s + 2h
-        'nu2': (2, -1, 2, -1, 0, 0, 0),    # 2τ - s + 2h - p
-        'l2':  (2, 1, 0, -1, 0, 0, 180),   # 2τ + s - p + 180°
-        't2':  (2, 2, -3, 0, 0, 1, 0),     # 2T - h + pp
-        'lambda2': (2, 1, -2, 1, 0, 0, 180), # 2τ + s - 2h + p + 180°
-        'eps2': (2, -3, 2, 1, 0, 0, 0),    # 2τ - 3s + 2h + p
-
-        # Diurnal
-        'k1':  (1, 1, 0, 0, 0, 0, -90),    # τ + s - 90° = T + h - 90°
-        'o1':  (1, -1, 0, 0, 0, 0, 90),    # τ - s + 90°
-        'p1':  (1, 1, -2, 0, 0, 0, 90),    # τ + s - 2h + 90° = T - h + 90°
-        'q1':  (1, -2, 0, 1, 0, 0, 90),    # τ - 2s + p + 90°
-        'j1':  (1, 2, 0, -1, 0, 0, -90),   # τ + 2s - p - 90°
-        'm1':  (1, 0, 0, 0, 0, 0, -90),    # τ - 90°
-        'oo1': (1, 2, 0, 0, 0, 0, -90),    # τ + 2s - 90°
-        'rho1': (1, -2, 2, -1, 0, 0, 90),  # τ - 2s + 2h - p + 90°
-        's1':  (1, 1, -1, 0, 0, 0, 0),     # T
-
-        # Shallow water
-        'm4':  (4, 0, 0, 0, 0, 0, 0),      # 4τ
-        'ms4': (4, 2, -2, 0, 0, 0, 0),     # 4τ + 2s - 2h
-        'mn4': (4, -1, 0, 1, 0, 0, 0),     # 4τ - s + p
-        'm6':  (6, 0, 0, 0, 0, 0, 0),      # 6τ
-        'm8':  (8, 0, 0, 0, 0, 0, 0),      # 8τ
-        's4':  (4, 4, -4, 0, 0, 0, 0),     # 4T
-        'm3':  (3, 0, 0, 0, 0, 0, 0),      # 3τ
-        'mks2': (2, 2, 0, 0, 0, 0, 0),     # Same as K2
-        'n4':  (4, -2, 0, 2, 0, 0, 0),     # 4τ - 2s + 2p
-        'r2':  (2, 2, -1, 0, 0, -1, 0),    # 2T + h - pp
-
-        # Long period
-        'mf':  (0, 2, 0, 0, 0, 0, 0),      # 2s
-        'mm':  (0, 1, 0, -1, 0, 0, 0),     # s - p
-        'ssa': (0, 0, 2, 0, 0, 0, 0),      # 2h
-        'sa':  (0, 0, 1, 0, 0, 0, 0),      # h
-        'msf': (0, 2, -2, 0, 0, 0, 0),     # 2s - 2h
-        'msqm': (0, 2, -2, 0, 0, 0, 0),    # 2s - 2h
-        'mtm': (0, 3, 0, -1, 0, 0, 0),     # 3s - p
-    }
-
-    if const not in doodson:
-        return 0.0
-
-    coef = doodson[const]
-    V0 = (coef[0] * tau + coef[1] * s + coef[2] * h +
-          coef[3] * p + coef[4] * N + coef[5] * pp + coef[6])
-
-    return V0 % 360.0
+DIURNAL_PHASE_CORRECTION_CONSTITUENTS = frozenset({
+    'k1', 'o1', 'p1', 'q1', 'j1', 'm1', 'oo1', 'rho1', 's1'
+})
 
 
 class FES2022TideService:
@@ -488,21 +454,14 @@ class FES2022TideService:
         Initialize the FES2022 Tide Service.
 
         Args:
-            data_path: Path to directory containing 'ocean_tide_extrapolated' folder
+            data_path: Path to directory containing FES2022b_OceanTide_NSgrid.nc
         """
         self.data_path = data_path
-        self.ocean_path = os.path.join(data_path, 'ocean_tide_extrapolated')
-
-        # Cache for loaded NetCDF datasets
-        self._datasets = {}
-        self._grids = {}
+        nc_path = os.path.join(data_path, 'FES2022b_OceanTide_NSgrid.nc')
+        self._grid = NativeGridReader(nc_path)
 
         # Cache TimezoneFinder instance (loads data on first use)
         self._tz_finder = TimezoneFinder()
-
-        # Verify data directories exist
-        if not os.path.exists(self.ocean_path):
-            raise FileNotFoundError(f"Ocean tide data directory not found: {self.ocean_path}")
 
     def _get_timezone(self, lat: float, lon: float, timezone_str: Optional[str] = None) -> ZoneInfo:
         """
@@ -537,122 +496,11 @@ class FES2022TideService:
             Dictionary mapping constituent names to (amplitude, phase) tuples
         """
         constituents = {}
-        for const in self.CONSTITUENTS_TO_USE:
-            amp, phase = self.get_constituent_data(const, lat, lon)
+        constituent_data = self._grid.get_constituents_data(self.CONSTITUENTS_TO_USE, lat, lon)
+        for const, (amp, phase) in constituent_data.items():
             if amp > 0.001:  # Only include significant constituents
                 constituents[const] = (amp, phase)
         return constituents
-    
-    def _get_dataset(self, constituent: str) -> Optional[Dataset]:
-        """Load and cache NetCDF dataset for a constituent."""
-        if constituent in self._datasets:
-            return self._datasets[constituent]
-
-        ocean_file = os.path.join(self.ocean_path, f"{constituent}_fes2022.nc")
-        if os.path.exists(ocean_file):
-            try:
-                ds = Dataset(ocean_file, 'r')
-                self._datasets[constituent] = ds
-                return ds
-            except (OSError, IOError, RuntimeError):
-                # NetCDF file exists but failed to open (corrupted, permissions, etc.)
-                pass
-
-        return None
-    
-    def _get_grid_info(self, dataset: Dataset) -> Dict:
-        """Extract grid information from NetCDF dataset."""
-        # FES2022 files typically have 'lat' and 'lon' variables
-        if 'lat' in dataset.variables and 'lon' in dataset.variables:
-            lats = dataset.variables['lat'][:]
-            lons = dataset.variables['lon'][:]
-            return {
-                'lats': np.array(lats),
-                'lons': np.array(lons),
-                'lat_min': float(np.min(lats)),
-                'lat_max': float(np.max(lats)),
-                'lon_min': float(np.min(lons)),
-                'lon_max': float(np.max(lons)),
-            }
-        return None
-    
-    def _interpolate_value(self, dataset: Dataset, lat: float, lon: float) -> Tuple[float, float]:
-        """
-        Interpolate amplitude and phase for given lat/lon from NetCDF dataset.
-        
-        Returns:
-            Tuple of (amplitude, phase) in meters and degrees
-        """
-        # Check the longitude format of the data file
-        grid_info = self._get_grid_info(dataset)
-        if not grid_info:
-            return 0.0, 0.0
-
-        # If data uses 0-360 format, convert negative longitudes
-        if grid_info['lon_min'] >= 0 and grid_info['lon_max'] > 180:
-            # Data is in 0-360 format
-            if lon < 0:
-                lon += 360
-        else:
-            # Data is in -180 to 180 format
-            if lon > 180:
-                lon -= 360
-            elif lon < -180:
-                lon += 360
-        
-        lats = grid_info['lats']
-        lons = grid_info['lons']
-        
-        # Find nearest grid point (simple nearest neighbor for now)
-        lat_idx = np.argmin(np.abs(lats - lat))
-        lon_idx = np.argmin(np.abs(lons - lon))
-        
-        # Try different variable name conventions
-        amplitude = 0.0
-        phase = 0.0
-        
-        # FES2022 files may use 'amplitude'/'phase' or 'Re'/'Im' (real/imaginary)
-        if 'amplitude' in dataset.variables and 'phase' in dataset.variables:
-            amp_var = dataset.variables['amplitude']
-            phase_var = dataset.variables['phase']
-            
-            # Handle 2D arrays (lat, lon)
-            if len(amp_var.shape) == 2:
-                amplitude = float(amp_var[lat_idx, lon_idx])
-                phase = float(phase_var[lat_idx, lon_idx])
-            elif len(amp_var.shape) == 1:
-                # 1D array, need to calculate index
-                idx = lat_idx * len(lons) + lon_idx
-                amplitude = float(amp_var[idx])
-                phase = float(phase_var[idx])
-        
-        elif 'Re' in dataset.variables and 'Im' in dataset.variables:
-            # Real and imaginary parts - convert to amplitude and phase
-            re_var = dataset.variables['Re']
-            im_var = dataset.variables['Im']
-            
-            if len(re_var.shape) == 2:
-                re = float(re_var[lat_idx, lon_idx])
-                im = float(im_var[lat_idx, lon_idx])
-            elif len(re_var.shape) == 1:
-                idx = lat_idx * len(lons) + lon_idx
-                re = float(re_var[idx])
-                im = float(im_var[idx])
-            else:
-                return 0.0, 0.0
-            
-            # Convert to amplitude and phase
-            amplitude = np.sqrt(re**2 + im**2)
-            phase = np.degrees(np.arctan2(im, re))
-        
-        # Handle missing values
-        if np.isnan(amplitude) or np.isnan(phase) or amplitude < 0:
-            return 0.0, 0.0
-
-        # FES2022 stores amplitude in centimeters - convert to meters
-        amplitude = amplitude / 100.0
-
-        return amplitude, phase
     
     def get_constituent_data(self, constituent: str, lat: float, lon: float) -> Tuple[float, float]:
         """
@@ -666,13 +514,59 @@ class FES2022TideService:
         Returns:
             Tuple of (amplitude in meters, phase in degrees)
         """
-        constituent = constituent.lower()
-        dataset = self._get_dataset(constituent)
-        
-        if dataset is None:
-            return 0.0, 0.0
-        
-        return self._interpolate_value(dataset, lat, lon)
+        return self._grid.get_constituent_data(constituent, lat, lon)
+
+    def _get_start_time(
+        self,
+        lat: float,
+        lon: float,
+        timezone_str: Optional[str],
+        start_date: Optional[datetime],
+    ) -> datetime:
+        """Resolve the local midnight used as the prediction start."""
+        tz = self._get_timezone(lat, lon, timezone_str)
+        if start_date is not None:
+            return datetime(
+                start_date.year, start_date.month, start_date.day,
+                hour=0, minute=0, second=0, microsecond=0, tzinfo=tz
+            )
+
+        now = datetime.now(tz)
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    @staticmethod
+    def _build_time_grid(
+        start_time: datetime,
+        days: int,
+        points_per_hour: int,
+        include_endpoint: bool = False,
+    ) -> Tuple[np.ndarray, List[datetime]]:
+        """Build time offsets and datetimes for harmonic evaluation."""
+        num_points = days * 24 * points_per_hour
+        if include_endpoint:
+            num_points += 1
+        time_offsets_hours = np.linspace(0, days * 24, num_points)
+        datetimes = [start_time + timedelta(hours=float(h)) for h in time_offsets_hours]
+        return time_offsets_hours, datetimes
+
+    def _apply_datum(
+        self,
+        heights: np.ndarray,
+        lat: float,
+        lon: float,
+        datum: TidalDatum,
+        days: int,
+        start_time: datetime,
+        datum_offset: Optional[float] = None,
+    ) -> Tuple[np.ndarray, str]:
+        """Apply datum adjustment and return adjusted heights plus datum label."""
+        if datum_offset is not None:
+            return heights - datum_offset, "custom"
+
+        offset_to_apply = self._calculate_datum_offset(
+            lat, lon, datum, days=min(days, 30), start_time=start_time
+        )
+        return heights + offset_to_apply, datum.value
     
     def _calculate_harmonic_tide_at_times(
         self,
@@ -738,9 +632,6 @@ class FES2022TideService:
         # Get nodal corrections once (they vary on 18.6-year cycle, essentially constant over days)
         nodal = _nodal_corrections(astro_mid['N'], astro_mid['p'])
 
-        # Diurnal constituents that need phase correction
-        diurnal_constituents = {'k1', 'o1', 'p1', 'q1', 'j1', 'm1', 'oo1', 'rho1', 's1'}
-
         # Hour angles for all time points (degrees)
         hour_angles = hours_of_day * 15.0
 
@@ -751,8 +642,6 @@ class FES2022TideService:
         # For better accuracy, compute T (Julian centuries) for each point
         # T varies slowly, so we can interpolate
         T_start = _julian_centuries(dt0_utc)
-        days_span = hours_from_start[-1] / 24.0 if len(hours_from_start) > 1 else 1.0
-        T_end_approx = T_start + days_span / 36525.0  # Approximate T at end
 
         # Linear interpolation of T (Julian centuries change very slowly)
         T_array = T_start + (hours_from_start / 24.0) / 36525.0
@@ -771,37 +660,6 @@ class FES2022TideService:
         # Initialize heights array
         heights = np.zeros(n)
 
-        # Doodson coefficients (tau, s, h, p, N, pp, constant)
-        doodson = {
-            'm2':  (2, 0, 0, 0, 0, 0, 0),
-            's2':  (2, 2, -2, 0, 0, 0, 0),
-            'n2':  (2, -1, 0, 1, 0, 0, 0),
-            'k2':  (2, 2, 0, 0, 0, 0, 0),
-            '2n2': (2, -2, 0, 2, 0, 0, 0),
-            'mu2': (2, -2, 2, 0, 0, 0, 0),
-            'nu2': (2, -1, 2, -1, 0, 0, 0),
-            'l2':  (2, 1, 0, -1, 0, 0, 180),
-            't2':  (2, 2, -3, 0, 0, 1, 0),
-            'k1':  (1, 1, 0, 0, 0, 0, -90),
-            'o1':  (1, -1, 0, 0, 0, 0, 90),
-            'p1':  (1, 1, -2, 0, 0, 0, 90),
-            'q1':  (1, -2, 0, 1, 0, 0, 90),
-            'j1':  (1, 2, 0, -1, 0, 0, -90),
-            'm1':  (1, 0, 0, 0, 0, 0, -90),
-            'oo1': (1, 2, 0, 0, 0, 0, -90),
-            'rho1': (1, -2, 2, -1, 0, 0, 90),
-            's1':  (1, 1, -1, 0, 0, 0, 0),
-            'm4':  (4, 0, 0, 0, 0, 0, 0),
-            'ms4': (4, 2, -2, 0, 0, 0, 0),
-            'mn4': (4, -1, 0, 1, 0, 0, 0),
-            'm6':  (6, 0, 0, 0, 0, 0, 0),
-            'm3':  (3, 0, 0, 0, 0, 0, 0),
-            'mf':  (0, 2, 0, 0, 0, 0, 0),
-            'mm':  (0, 1, 0, -1, 0, 0, 0),
-            'ssa': (0, 0, 2, 0, 0, 0, 0),
-            'sa':  (0, 0, 1, 0, 0, 0, 0),
-        }
-
         # Use midpoint values for slowly-varying arguments
         p_mid = astro_mid['p']
         N_mid = astro_mid['N']
@@ -810,21 +668,23 @@ class FES2022TideService:
         # Sum contributions from each constituent (vectorized over time)
         for const_name, (amplitude, kappa) in constituents.items():
             const = const_name.lower()
-            if const not in self.CONSTITUENTS or const not in doodson:
+            if const not in self.CONSTITUENTS or const not in DOODSON_COEFFICIENTS:
                 continue
 
             # Get nodal corrections (constant over prediction period)
             f, u = nodal.get(const, (1.0, 0.0))
 
             # Get Doodson coefficients
-            coef = doodson[const]
+            coef = DOODSON_COEFFICIENTS[const]
 
             # Calculate equilibrium argument V for all times (vectorized)
             V_array = (coef[0] * tau_array + coef[1] * s_array + coef[2] * h_array +
                        coef[3] * p_mid + coef[4] * N_mid + coef[5] * pp_mid + coef[6]) % 360.0
 
             # Apply diurnal phase correction
-            kappa_corrected = kappa + 180.0 if const in diurnal_constituents else kappa
+            kappa_corrected = (
+                kappa + 180.0 if const in DIURNAL_PHASE_CORRECTION_CONSTITUENTS else kappa
+            )
 
             # Phase argument for all times
             phase_arg = V_array + u - kappa_corrected
@@ -865,26 +725,11 @@ class FES2022TideService:
             - height_ft: Height in feet (relative to specified datum)
             - datum: The datum reference used for this prediction
         """
-        # Get timezone (auto-detect from coordinates if not provided)
-        tz = self._get_timezone(lat, lon, timezone_str)
-
-        # Use provided start_date or current date
-        if start_date is not None:
-            # Use the date portion in local timezone (ignore time/tz from input)
-            start_time = datetime(
-                start_date.year, start_date.month, start_date.day,
-                hour=0, minute=0, second=0, microsecond=0, tzinfo=tz
-            )
-        else:
-            now = datetime.now(tz)
-            start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
         # Generate time array (every 3 minutes for accurate extrema detection)
-        num_points = days * 24 * 20  # 20 points per hour = 3 minute intervals
-        time_offsets_hours = np.linspace(0, days * 24, num_points)
-
-        # Create datetime objects for each time point
-        datetimes = [start_time + timedelta(hours=float(h)) for h in time_offsets_hours]
+        start_time = self._get_start_time(lat, lon, timezone_str, start_date)
+        time_offsets_hours, datetimes = self._build_time_grid(
+            start_time, days, points_per_hour=20
+        )
 
         # Load constituent data for this location
         constituents = self._load_constituents(lat, lon)
@@ -894,83 +739,20 @@ class FES2022TideService:
         # Calculate tide heights using astronomical arguments
         heights = self._calculate_harmonic_tide_at_times(datetimes, constituents)
 
-        # Calculate and apply datum offset
-        if datum_offset is not None:
-            # Use manual offset if provided (deprecated path - keeps old behavior)
-            # Old behavior: subtract offset (e.g., datum_offset=1.0 lowers heights by 1.0m)
-            heights -= datum_offset
-            datum_used = "custom"
-        else:
-            # Calculate offset based on datum parameter (new behavior)
-            offset_to_apply = self._calculate_datum_offset(lat, lon, datum, days=min(days, 30))
-            # New behavior: add offset (offsets are already sign-corrected)
-            heights += offset_to_apply
-            datum_used = datum.value
+        heights, datum_used = self._apply_datum(
+            heights, lat, lon, datum, days, start_time, datum_offset
+        )
 
-        # Find high and low tides (local extrema)
-        events = []
-
-        # Use gradient to find zero crossings (extrema)
-        gradient = np.gradient(heights)
-        sign_changes = np.where(np.diff(np.sign(gradient)))[0]
-
-        for idx in sign_changes:
-            if idx < 1 or idx >= len(heights) - 1:
-                continue
-
-            # Determine if it's a high or low tide based on gradient direction
-            # If gradient goes from positive to negative, it's a maximum (high tide)
-            # If gradient goes from negative to positive, it's a minimum (low tide)
-            if gradient[idx] > 0 and gradient[idx + 1] <= 0:
-                tide_type = 'high'
-            elif gradient[idx] < 0 and gradient[idx + 1] >= 0:
-                tide_type = 'low'
-            else:
-                continue
-
-            # Use parabolic interpolation to find sub-sample extremum time
-            # This improves timing accuracy by finding the true peak/trough between samples
-            # Fit parabola through 3 points: (idx-1, idx, idx+1)
-            h1, h2, h3 = heights[idx - 1], heights[idx], heights[idx + 1]
-            t2 = time_offsets_hours[idx]
-            dt = time_offsets_hours[idx + 1] - t2  # Time step between samples
-
-            # Parabolic interpolation formula for vertex
-            # For a parabola through 3 equally-spaced points, the vertex offset from center is:
-            # t_offset = 0.5 * (h1 - h3) / (h1 - 2*h2 + h3) * dt
-            denom = (h1 - 2*h2 + h3)
-            if abs(denom) > 1e-10:
-                t_offset = 0.5 * (h1 - h3) / denom * dt
-                t_extremum = t2 + t_offset
-                # Interpolate the height at the true extremum
-                height_m = float(h2 - 0.25 * (h1 - h3) * (h1 - h3) / denom)
-            else:
-                t_extremum = t2
-                height_m = float(h2)
-
-            # Convert hours offset back to datetime
-            event_time = start_time + timedelta(hours=float(t_extremum))
-            event_time = event_time.replace(microsecond=0)  # Remove microseconds for cleaner ISO output
-            height_ft = height_m * 3.28084  # Convert to feet
-
-            events.append({
-                'type': tide_type,
-                'datetime': event_time.isoformat(),
-                'height_m': round(height_m, 3),
-                'height_ft': round(height_ft, 3),
-                'datum': datum_used
-            })
-
-        # Sort by time
-        events.sort(key=lambda x: x['datetime'])
-
-        return events
+        return self._find_extrema_from_heights(
+            heights, time_offsets_hours, start_time, datum_used=datum_used
+        )
     
     def _find_extrema_from_heights(
         self,
         heights: np.ndarray,
         time_offsets_hours: np.ndarray,
-        start_time: datetime
+        start_time: datetime,
+        datum_used: Optional[str] = None,
     ) -> List[Dict]:
         """
         Find high/low tide extrema from a heights array.
@@ -1015,11 +797,16 @@ class FES2022TideService:
                 height_m = float(h2)
 
             event_time = start_time + timedelta(hours=float(t_extremum))
-            events.append({
+            event_time = event_time.replace(microsecond=0)
+            event = {
                 'type': tide_type,
                 'datetime': event_time.isoformat(),
                 'height_m': round(height_m, 3),
-            })
+            }
+            if datum_used is not None:
+                event['height_ft'] = round(height_m * 3.28084, 3)
+                event['datum'] = datum_used
+            events.append(event)
 
         events.sort(key=lambda x: x['datetime'])
         return events
@@ -1029,7 +816,8 @@ class FES2022TideService:
         lat: float,
         lon: float,
         target_datum: TidalDatum,
-        days: int = 30
+        days: int = 30,
+        start_time: Optional[datetime] = None,
     ) -> float:
         """
         Calculate the offset needed to convert from MSL to the target datum.
@@ -1039,6 +827,7 @@ class FES2022TideService:
             lon: Longitude in degrees
             target_datum: Target datum (MSL, MLLW, or LAT)
             days: Number of days to analyze for calculation
+            start_time: Local datetime to anchor the datum analysis window
 
         Returns:
             Offset in meters (added to MSL heights to get target datum heights)
@@ -1047,15 +836,16 @@ class FES2022TideService:
             return 0.0
 
         # Compute raw tide heights without calling predict_tides (avoids recursion)
-        from zoneinfo import ZoneInfo
-        tz = ZoneInfo('UTC')
-        now = datetime.now(tz)
-        start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if start_time is None:
+            now = datetime.now(ZoneInfo('UTC'))
+            start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            start_time = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Generate time array (every 3 minutes for accurate extrema detection)
-        num_points = days * 24 * 20  # 20 points per hour = 3 minute intervals
-        time_offsets_hours = np.linspace(0, days * 24, num_points)
-        datetimes = [start_time + timedelta(hours=float(h)) for h in time_offsets_hours]
+        time_offsets_hours, datetimes = self._build_time_grid(
+            start_time, days, points_per_hour=20
+        )
 
         # Load constituent data
         constituents = self._load_constituents(lat, lon)
@@ -1158,27 +948,12 @@ class FES2022TideService:
         if interval_minutes not in (15, 30, 60):
             raise ValueError("interval_minutes must be 15, 30, or 60")
 
-        # Get timezone (auto-detect from coordinates if not provided)
-        tz = self._get_timezone(lat, lon, timezone_str)
-
-        # Use provided start_date or current date
-        if start_date is not None:
-            # Use the date portion in local timezone (ignore time/tz from input)
-            start_time = datetime(
-                start_date.year, start_date.month, start_date.day,
-                hour=0, minute=0, second=0, microsecond=0, tzinfo=tz
-            )
-        else:
-            now = datetime.now(tz)
-            start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
         # Generate time array at requested intervals
         points_per_hour = 60 // interval_minutes
-        num_points = days * 24 * points_per_hour + 1  # +1 to include end point
-        time_offsets_hours = np.linspace(0, days * 24, num_points)
-
-        # Create datetime objects for each time point
-        datetimes = [start_time + timedelta(hours=float(h)) for h in time_offsets_hours]
+        start_time = self._get_start_time(lat, lon, timezone_str, start_date)
+        _, datetimes = self._build_time_grid(
+            start_time, days, points_per_hour=points_per_hour, include_endpoint=True
+        )
 
         # Load constituent data for this location
         constituents = self._load_constituents(lat, lon)
@@ -1189,18 +964,9 @@ class FES2022TideService:
         # Calculate tide heights
         heights = self._calculate_harmonic_tide_at_times(datetimes, constituents)
 
-        # Calculate and apply datum offset
-        if datum_offset is not None:
-            # Use manual offset if provided (deprecated path - keeps old behavior)
-            # Old behavior: subtract offset (e.g., datum_offset=1.0 lowers heights by 1.0m)
-            heights -= datum_offset
-            datum_used = "custom"
-        else:
-            # Calculate offset based on datum parameter (new behavior)
-            offset_to_apply = self._calculate_datum_offset(lat, lon, datum, days=min(days, 30))
-            # New behavior: add offset (offsets are already sign-corrected)
-            heights += offset_to_apply
-            datum_used = datum.value
+        heights, datum_used = self._apply_datum(
+            heights, lat, lon, datum, days, start_time, datum_offset
+        )
 
         # Build result list
         results = []
@@ -1249,24 +1015,11 @@ class FES2022TideService:
         if interval_minutes not in (15, 30, 60):
             raise ValueError("interval_minutes must be 15, 30, or 60")
 
-        # Get timezone (auto-detect from coordinates if not provided)
-        tz = self._get_timezone(lat, lon, timezone_str)
-
-        # Use provided start_date or current date
-        if start_date is not None:
-            # Use the date portion in local timezone (ignore time/tz from input)
-            start_time = datetime(
-                start_date.year, start_date.month, start_date.day,
-                hour=0, minute=0, second=0, microsecond=0, tzinfo=tz
-            )
-        else:
-            now = datetime.now(tz)
-            start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
         # Generate HIGH-RESOLUTION time array (3-minute intervals for accurate extrema)
-        num_points_highres = days * 24 * 20  # 20 points per hour = 3 minute intervals
-        time_offsets_hours_highres = np.linspace(0, days * 24, num_points_highres)
-        datetimes_highres = [start_time + timedelta(hours=float(h)) for h in time_offsets_hours_highres]
+        start_time = self._get_start_time(lat, lon, timezone_str, start_date)
+        time_offsets_hours_highres, datetimes_highres = self._build_time_grid(
+            start_time, days, points_per_hour=20
+        )
 
         # Load constituent data for this location
         constituents = self._load_constituents(lat, lon)
@@ -1276,10 +1029,9 @@ class FES2022TideService:
         # Calculate tide heights at HIGH RESOLUTION (single expensive computation)
         heights_highres = self._calculate_harmonic_tide_at_times(datetimes_highres, constituents)
 
-        # Apply datum offset
-        offset_to_apply = self._calculate_datum_offset(lat, lon, datum, days=min(days, 30))
-        heights_highres += offset_to_apply
-        datum_used = datum.value
+        heights_highres, datum_used = self._apply_datum(
+            heights_highres, lat, lon, datum, days, start_time
+        )
 
         # === EXTRACT INTERVAL HEIGHTS ===
         # Calculate step size: how many 3-minute intervals per user interval
@@ -1298,50 +1050,8 @@ class FES2022TideService:
                     'datum': datum_used
                 })
 
-        # === FIND EXTREMA (HIGH/LOW TIDES) ===
-        extrema_events = []
-        gradient = np.gradient(heights_highres)
-        sign_changes = np.where(np.diff(np.sign(gradient)))[0]
-
-        for idx in sign_changes:
-            if idx < 1 or idx >= len(heights_highres) - 1:
-                continue
-
-            # Determine if it's a high or low tide
-            if gradient[idx] > 0 and gradient[idx + 1] <= 0:
-                tide_type = 'high'
-            elif gradient[idx] < 0 and gradient[idx + 1] >= 0:
-                tide_type = 'low'
-            else:
-                continue
-
-            # Parabolic interpolation for precise timing
-            h1, h2, h3 = heights_highres[idx - 1], heights_highres[idx], heights_highres[idx + 1]
-            t2 = time_offsets_hours_highres[idx]
-            dt = time_offsets_hours_highres[idx + 1] - t2
-
-            denom = (h1 - 2*h2 + h3)
-            if abs(denom) > 1e-10:
-                t_offset = 0.5 * (h1 - h3) / denom * dt
-                t_extremum = t2 + t_offset
-                height_m = float(h2 - 0.25 * (h1 - h3) * (h1 - h3) / denom)
-            else:
-                t_extremum = t2
-                height_m = float(h2)
-
-            event_time = start_time + timedelta(hours=float(t_extremum))
-            event_time = event_time.replace(microsecond=0)
-            height_ft = height_m * 3.28084
-
-            extrema_events.append({
-                'type': tide_type,
-                'datetime': event_time.isoformat(),
-                'height_m': round(height_m, 3),
-                'height_ft': round(height_ft, 3),
-                'datum': datum_used
-            })
-
-        # Sort extrema by time
-        extrema_events.sort(key=lambda x: x['datetime'])
+        extrema_events = self._find_extrema_from_heights(
+            heights_highres, time_offsets_hours_highres, start_time, datum_used=datum_used
+        )
 
         return interval_heights, extrema_events

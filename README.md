@@ -19,9 +19,11 @@ All times are automatically returned in the local timezone for the requested coo
 ```bash
 source venv/bin/activate
 pip install -r requirements.txt
+export FES_DATA_PATH=/path/to/fes2022b-data
 uvicorn app.main:app --reload
 ```
 
+`FES_DATA_PATH` must point at the directory containing `FES2022b_OceanTide_NSgrid.nc`.
 API docs at http://localhost:8000/docs
 
 ## API Reference
@@ -132,7 +134,7 @@ Visual dashboard comparing Sun Moon Tides predictions against other tide provide
 http://localhost:8000/api/v1/comparison
 ```
 
-Useful for evaluating accuracy in different regions.
+Useful for evaluating accuracy in different regions. Each location shows a FES2022b tide curve with external-provider high/low markers overlaid, plus exact timing/range numbers in a collapsed table.
 
 ## Python Usage
 
@@ -152,16 +154,26 @@ for tide in tides:
 pytest tests/ -v
 ```
 
+Grid-backed tests are marked `requires_grid` and need `FES_DATA_PATH` plus enough RAM to load the native grid. The lightweight `tests/test_native_grid.py` tests the interpolation math without the 3.7 GB data file.
+
 ## Data Requirements
 
 This project requires two data sources:
 
-- `ocean_tide_extrapolated/` - FES2022 tidal constituent files (for tide predictions)
+- `FES2022b_OceanTide_NSgrid.nc` - FES2022b native-grid tidal constituents (for tide predictions)
 - `de421.bsp` - NASA JPL planetary ephemeris (for sun/moon calculations)
 
 The `de421.bsp` file (~17 MB) contains precise positions of the Sun, Moon, and planets. Skyfield downloads it automatically on first run, or you can download it manually from [NASA JPL](https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/).
 
-### How to Download FES2022 Data
+The native grid file is large (~3.7 GB on disk) and is eager-loaded at startup for zero per-request disk I/O. Plan for roughly 8 GB runtime memory locally and at least a 16 GB production server.
+
+For Docker, mount the directory containing the `.nc` file and point `FES_DATA_PATH` at that mount:
+
+```bash
+docker run -e FES_DATA_PATH=/data -v /path/to/fes2022b-data:/data sun-moon-tides
+```
+
+### How to Download FES2022b Data
 
 1. **Register on AVISO**: Go to [AVISO Registration](https://www.aviso.altimetry.fr/en/data/data-access/registration-form.html) and create an account. Select the product "FES (Finite Element Solution - Oceanic Tides Heights)".
 
@@ -171,18 +183,15 @@ The `de421.bsp` file (~17 MB) contains precise positions of the Sun, Moon, and p
    - **Host**: `ftp-access.aviso.altimetry.fr`
    - **Protocol**: FTP or SFTP (port 2221 for SFTP)
 
-   Download this folder:
-   | Folder | FTP Path |
-   |--------|----------|
-   | `ocean_tide_extrapolated/` | `/auxiliary/tide_model/fes2022b/ocean_tide_extrapolated/` |
+   Download the native-grid ocean tide file:
+   | File | Description |
+   |------|-------------|
+   | `FES2022b_OceanTide_NSgrid.nc` | Native unstructured finite-element grid with all 34 ocean tide constituents |
 
-4. **Place files in project**: Copy the downloaded folder to the project root directory:
+4. **Place files outside git**: Put the file in a local data directory and point `FES_DATA_PATH` there:
    ```
-   sun-moon-tides/
-   ├── ocean_tide_extrapolated/   <- (m2_fes2022.nc, s2_fes2022.nc, etc.)
-   ├── app/
-   ├── tests/
-   └── ...
+   /path/to/fes2022b-data/
+   └── FES2022b_OceanTide_NSgrid.nc
    ```
 
 The data is free for any use (including commercial) but requires [registration](https://www.aviso.altimetry.fr/en/data/data-access.html) and proper citation.
@@ -190,9 +199,9 @@ The data is free for any use (including commercial) but requires [registration](
 ## Accuracy
 
 This is a **global physics-based model**, not calibrated to local tide stations:
-- **Timing accuracy**: Typically ±10-30 minutes, but can be ±1-4 hours in complex coastal areas (harbors, bays, estuaries)
+- **Timing accuracy**: Typically ±10-30 minutes; the FES2022b native grid improves difficult harbors, bays, and estuaries versus the old cartesian grid
 - **Tidal range accuracy**: ±0.3m for consecutive high/low differences
-- **Known limitations**: Poor accuracy in areas with complex coastal geometry, shallow water effects, or strong local resonance
+- **Known limitations**: Strong local resonance, river effects, and station-specific datum differences can still make local tide gauges more precise
 
 Use the comparison tool to see where Sun Moon Tides works well vs. poorly for your region.
 
@@ -238,10 +247,10 @@ This service uses **FES2022** (Finite Element Solution 2022), a global ocean tid
 
 Key characteristics:
 - **Global coverage**: Works anywhere in the world's oceans
-- **High resolution**: 2-minute grid (~3.7 km at equator)
+- **Native finite-element grid**: 11M triangles with roughly 500m-4km coastal resolution
 - **34 tidal constituents**: Captures all major tidal frequencies
 - **Satellite-validated**: Built using 28 years of satellite altimetry data (1992-2020)
-- **11 million mesh elements**: 8x more detailed than the previous FES2014 model
+- **Quadratic interpolation**: LGP2 interpolation on the native mesh instead of nearest-neighbour cartesian lookup
 
 The model is physics-based and doesn't require local tide gauge calibration, which enables worldwide coverage but means predictions may be less precise than locally-calibrated services in complex coastal areas.
 
