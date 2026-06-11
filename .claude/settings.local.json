@@ -32,7 +32,9 @@
       "Bash(pdftoppm -v)",
       "Bash(pdftotext /Users/giulioandreini/Desktop/_temp/hdbk_FES2022.pdf -)",
       "Bash(gh api:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
