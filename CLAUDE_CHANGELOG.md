@@ -9,12 +9,12 @@ Log of modifications made during Claude Code sessions. This file helps track wha
 ### Added
 - "What's New — 2026-06-11" section at the top of `README.md` summarizing everything on the `feature/fes2022b-native-grid` branch: native grid migration, 34 constituents, eager loading, comparison dashboard, rate limiting, new tests.
 - Rate-limit note in the README API Reference (240 requests/minute per IP, added to the endpoints in commit `d5e7527`).
-- Three comparison-view screenshots (`docs/images/comparison-*.png` — Cocoa Beach, Ocean Beach SF, Cape Town) embedded in the README's Comparison Tool section.
+- Two comparison-view screenshots (`docs/images/comparison-*.png` — Cocoa Beach, Cape Town) embedded in the README's Comparison Tool section.
 
 ### Files affected
 - `README.md`
 - `CLAUDE_CHANGELOG.md`
-- `docs/images/comparison-cocoa-beach.png`, `docs/images/comparison-ocean-beach-sf.png`, `docs/images/comparison-cape-town.png`
+- `docs/images/comparison-cocoa-beach.png`, `docs/images/comparison-cape-town.png`
 
 ---
 

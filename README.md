@@ -155,8 +155,6 @@ Useful for evaluating accuracy in different regions. Each location shows a FES20
 
 ![Comparison view for Cocoa Beach, Florida — FES2022 tide curve with NOAA, StormGlass, and WorldTides markers](docs/images/comparison-cocoa-beach.png)
 
-![Comparison view for Ocean Beach, San Francisco — FES2022 closely tracking NOAA and WorldTides](docs/images/comparison-ocean-beach-sf.png)
-
 ![Comparison view for Cape Town, South Africa — FES2022 vs StormGlass and WorldTides](docs/images/comparison-cape-town.png)
 
 ## Python Usage
