@@ -4,6 +4,38 @@ Log of modifications made during Claude Code sessions. This file helps track wha
 
 ---
 
+## 2026-06-11
+
+### Added
+- "What's New — 2026-06-11" section at the top of `README.md` summarizing everything on the `feature/fes2022b-native-grid` branch: native grid migration, 34 constituents, eager loading, comparison dashboard, rate limiting, new tests.
+- Rate-limit note in the README API Reference (240 requests/minute per IP, added to the endpoints in commit `d5e7527`).
+- Two comparison-view screenshots (`docs/images/comparison-*.png` — Cocoa Beach, Cape Town) embedded in the README's Comparison Tool section.
+
+### Files affected
+- `README.md`
+- `CLAUDE_CHANGELOG.md`
+- `docs/images/comparison-cocoa-beach.png`, `docs/images/comparison-cape-town.png`
+
+---
+
+## 2026-06-08
+
+### Changed
+- Migrated tide service wiring from old cartesian `ocean_tide_extrapolated/` files to `NativeGridReader` over `FES2022b_OceanTide_NSgrid.nc`.
+- Added `scipy` dependency for native-grid cKDTree lookup.
+- Updated comparison endpoints to reuse the app-level `FES2022TideService` singleton instead of constructing a new service per request.
+- Replaced comparison-first experience with Chart.js tide curves: FES2022 continuous line plus NOAA, StormGlass, and WorldTides high/low markers, with exact tables collapsed below.
+- Documented the native-grid data requirement, `FES_DATA_PATH` semantics, and memory expectations.
+
+### Fixed
+- Guarded native-grid candidate lookup against SciPy KDTree sentinel indices when `k` exceeds the vertex count.
+
+### Tests
+- Added synthetic `NativeGridReader` interpolation tests for barycentric lookup, LGP2 node ordering, longitude wrapping, coastline fallback, and land handling.
+- Marked grid-backed tests with `requires_grid` and made them skip cleanly when the native grid file is unavailable.
+
+---
+
 ## 2026-01-15
 
 ### Fixed

@@ -37,7 +37,7 @@ TEST_LOCATIONS = {
         'name': 'Rockaway Beach, New York',
         'lat': 40.582021,
         'lon': -73.813316,
-        'noaa_station_id': '8516945',  # The Battery, NY
+        'noaa_station_id': '8517394',  # Barren Island, Rockaway Inlet, NY
     },
     # South America (no NOAA stations)
     'chicama': {

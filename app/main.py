@@ -40,6 +40,8 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+PUBLIC_API_RATE_LIMIT = "240/minute"
+
 # Add security headers middleware
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -50,10 +52,60 @@ tide_service = FES2022TideService(data_path=DATA_PATH)
 astronomy_service = AstronomyService()
 
 
+def _parse_start_date(start_date: Optional[str], default_to_now: bool = False) -> Optional[datetime]:
+    """Parse an optional ISO start date and default naive dates to UTC."""
+    if not start_date:
+        return datetime.now(timezone.utc) if default_to_now else None
+
+    try:
+        parsed_start_date = datetime.fromisoformat(start_date)
+    except ValueError:
+        raise HTTPException(
+            400, "Invalid date format. Please use ISO 8601 format (YYYY-MM-DD)"
+        )
+
+    if parsed_start_date.tzinfo is None:
+        parsed_start_date = parsed_start_date.replace(tzinfo=timezone.utc)
+    return parsed_start_date
+
+
+def _parse_datetime_for_sort(dt_str: str) -> datetime:
+    if dt_str.endswith("Z"):
+        dt_str = dt_str[:-1] + "+00:00"
+    return datetime.fromisoformat(dt_str)
+
+
+def _combine_tide_curve_and_extrema(heights: list[dict], events: list[dict]) -> list[dict]:
+    """Merge interval curve points with exact high/low events."""
+    combined = [
+        {
+            "datetime": height["datetime"],
+            "height_m": height["height_m"],
+            "height_ft": height["height_ft"],
+            "datum": height["datum"],
+        }
+        for height in heights
+    ]
+
+    combined.extend(
+        {
+            "type": event["type"],
+            "datetime": event["datetime"],
+            "height_m": event["height_m"],
+            "height_ft": event["height_ft"],
+            "datum": event["datum"],
+        }
+        for event in events
+    )
+
+    combined.sort(key=lambda x: _parse_datetime_for_sort(x["datetime"]))
+    return combined
 
 
 @app.get("/api/v1/tides")
+@limiter.limit(PUBLIC_API_RATE_LIMIT)
 async def get_tides(
+    request: Request,
     lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
     lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
     days: int = Query(7, ge=1, le=365, description="Number of days to predict"),
@@ -86,19 +138,7 @@ async def get_tides(
     - With interval=15: Returns 96 readings/day with high/low labels
     """
     try:
-        # Parse start_date or use None for current date
-        parsed_start_date = None
-        if start_date:
-            try:
-                parsed_start_date = datetime.fromisoformat(start_date)
-                if parsed_start_date.tzinfo is None:
-                    parsed_start_date = parsed_start_date.replace(tzinfo=timezone.utc)
-            except ValueError:
-                raise HTTPException(
-                    400, "Invalid date format. Please use ISO 8601 format (YYYY-MM-DD)"
-                )
-
-        # Convert datum string to enum
+        parsed_start_date = _parse_start_date(start_date)
         datum_enum = TidalDatum(datum)
 
         if interval is None:
@@ -118,43 +158,7 @@ async def get_tides(
                 start_date=parsed_start_date,
             )
 
-            # Combine heights and events, then sort by datetime
-            combined = []
-
-            # Add all interval heights (without type field)
-            for height in heights:
-                combined.append(
-                    {
-                        "datetime": height["datetime"],
-                        "height_m": height["height_m"],
-                        "height_ft": height["height_ft"],
-                        "datum": height["datum"],
-                    }
-                )
-
-            # Add high/low events with type field at their exact times
-            for event in events:
-                combined.append(
-                    {
-                        "type": event["type"],
-                        "datetime": event["datetime"],
-                        "height_m": event["height_m"],
-                        "height_ft": event["height_ft"],
-                        "datum": event["datum"],
-                    }
-                )
-
-            # Sort by datetime
-            def parse_datetime_for_sort(dt_str):
-                if dt_str.endswith("Z"):
-                    dt_str = dt_str[:-1] + "+00:00"
-                return datetime.fromisoformat(dt_str)
-
-            combined.sort(key=lambda x: parse_datetime_for_sort(x["datetime"]))
-
-            # Return the combined list directly - regular interval points don't have 'type' key
-            # Only high/low events have 'type' key, so no need to filter None values
-            return combined
+            return _combine_tide_curve_and_extrema(heights, events)
     except ValueError as e:
         raise HTTPException(400, detail=str(e))
     except HTTPException:
@@ -166,7 +170,9 @@ async def get_tides(
 
 
 @app.get("/api/v1/sun-moon")
+@limiter.limit(PUBLIC_API_RATE_LIMIT)
 async def get_sun_moon(
+    request: Request,
     lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
     lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
     days: int = Query(7, ge=1, le=365, description="Number of days to predict (1-365)"),
@@ -188,20 +194,7 @@ async def get_sun_moon(
     All times are returned in ISO 8601 format with local timezone.
     """
     try:
-        # Parse start_date or use current date
-        if start_date:
-            try:
-                parsed_start_date = datetime.fromisoformat(start_date)
-                # If no timezone provided, assume UTC
-                if parsed_start_date.tzinfo is None:
-                    parsed_start_date = parsed_start_date.replace(tzinfo=timezone.utc)
-            except ValueError:
-                raise HTTPException(
-                    400, "Invalid date format. Please use ISO 8601 format (YYYY-MM-DD)"
-                )
-        else:
-            # Use current date in UTC
-            parsed_start_date = datetime.now(timezone.utc)
+        parsed_start_date = _parse_start_date(start_date, default_to_now=True)
 
         # Get astronomical data
         astronomy_data = astronomy_service.get_all_astronomical_info(
@@ -218,7 +211,9 @@ async def get_sun_moon(
 
 
 @app.get("/api/v1/sun-moon-tides")
+@limiter.limit(PUBLIC_API_RATE_LIMIT)
 async def get_sun_moon_tides(
+    request: Request,
     lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
     lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
     days: int = Query(7, ge=1, le=365, description="Number of days to predict (1-365)"),
@@ -246,22 +241,7 @@ async def get_sun_moon_tides(
     All times are returned in ISO 8601 format with local timezone.
     """
     try:
-        # Parse start_date or use current date
-        if start_date:
-            try:
-                parsed_start_date = datetime.fromisoformat(start_date)
-                # If no timezone provided, assume UTC
-                if parsed_start_date.tzinfo is None:
-                    parsed_start_date = parsed_start_date.replace(tzinfo=timezone.utc)
-            except ValueError:
-                raise HTTPException(
-                    400, "Invalid date format. Please use ISO 8601 format (YYYY-MM-DD)"
-                )
-        else:
-            # Use current date in UTC
-            parsed_start_date = datetime.now(timezone.utc)
-
-        # Convert datum string to enum
+        parsed_start_date = _parse_start_date(start_date, default_to_now=True)
         datum_enum = TidalDatum(datum)
 
         # Get tide data
@@ -269,9 +249,9 @@ async def get_sun_moon_tides(
             # Return high/low tide events only
             tides = tide_service.predict_tides(lat, lon, days, datum=datum_enum, start_date=parsed_start_date)
         else:
-            # Return tide heights at regular intervals
+            # Return interval heights plus exact high/low events, matching /api/v1/tides.
             interval_int = int(interval)
-            tides = tide_service.get_tide_heights(
+            heights, events = tide_service.get_tides_with_extrema(
                 lat=lat,
                 lon=lon,
                 days=days,
@@ -279,6 +259,7 @@ async def get_sun_moon_tides(
                 datum=datum_enum,
                 start_date=parsed_start_date,
             )
+            tides = _combine_tide_curve_and_extrema(heights, events)
 
         # Get astronomy data
         astronomy_data = astronomy_service.get_all_astronomical_info(
@@ -323,7 +304,7 @@ async def get_comparison(
     """
     from .comparison import generate_comparison_shell_html
 
-    html = generate_comparison_shell_html(days)
+    html = generate_comparison_shell_html(days, tide_service)
     return HTMLResponse(content=html)
 
 
@@ -346,7 +327,7 @@ async def get_location_comparison(
     from .comparison import generate_single_location_html
 
     try:
-        html_content = generate_single_location_html(location_key, days)
+        html_content = generate_single_location_html(location_key, days, tide_service)
         return HTMLResponse(content=html_content)
     except Exception as e:
         error_msg = html_module.escape(f"Error for {location_key}: {str(e)}")

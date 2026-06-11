@@ -24,7 +24,17 @@
       "Bash(pkill:*)",
       "WebSearch",
       "Bash(time curl:*)",
-      "Bash(time python3:*)"
+      "Bash(time python3:*)",
+      "Bash(source venv/bin/activate && uvicorn app.main:app --reload)",
+      "Bash(open http://localhost:8000/api/v1/comparison)",
+      "Bash(git checkout:*)",
+      "Bash(brew install:*)",
+      "Bash(pdftoppm -v)",
+      "Bash(pdftotext /Users/giulioandreini/Desktop/_temp/hdbk_FES2022.pdf -)",
+      "Bash(gh api:*)",
+      "Bash(python:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

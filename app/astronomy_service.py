@@ -14,12 +14,13 @@ All calculations require latitude, longitude, and date.
 All times are returned in the local timezone (auto-detected from coordinates).
 """
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from skyfield import almanac
-from skyfield.api import load, wgs84
+from skyfield.api import Loader, load, wgs84
 from skyfield.timelib import Time
 from timezonefinder import TimezoneFinder
 
@@ -29,9 +30,12 @@ class AstronomyService:
 
     def __init__(self):
         """Initialize the astronomy service with required data."""
-        # Load the ephemeris data
-        self.eph = load("de421.bsp")
-        self.ts = load.timescale()
+        skyfield_data_dir = os.getenv("SKYFIELD_DATA_DIR")
+        skyfield_loader = Loader(skyfield_data_dir) if skyfield_data_dir else load
+
+        # Load the ephemeris data.
+        self.eph = skyfield_loader("de421.bsp")
+        self.ts = skyfield_loader.timescale()
 
         # Define celestial bodies
         self.sun = self.eph["sun"]

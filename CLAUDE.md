@@ -15,6 +15,9 @@ source venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
+# Point at native-grid tide data
+export FES_DATA_PATH=/path/to/fes2022b-data
+
 # Run development server locally
 uvicorn app.main:app --reload
 
@@ -44,6 +47,7 @@ pytest tests/ -v
 
 **Web-based Comparison** (`/api/v1/comparison` endpoint):
 - HTML report comparing FES2022 against NOAA, WorldTides, and StormGlass
+- Uses Chart.js: FES2022 renders as a continuous curve; external providers render as high/low markers
 - Accessible at http://localhost:8000/api/v1/comparison
 - Useful for identifying where FES2022 has accuracy issues
 
@@ -62,22 +66,30 @@ pytest tests/ -v
 
 **Comparison Module** (`app/comparison.py`):
 - Fetches tide data from multiple providers (NOAA, WorldTides, StormGlass)
-- Generates HTML comparison tables with time/range differences
+- Generates Chart.js tide curves with exact time/range tables collapsed below each location
 - Uses 6-hour matching window to handle large FES2022 timing errors
 - Dynamically loads API keys from `.env` file using python-dotenv
-- Imports test locations from `tests/test_locations.py`
+- Imports test locations from `app/locations.py`
 
 **Tide Service** (`app/tide_service.py`):
 - `FES2022TideService` class performs harmonic tide analysis
-- Reads NetCDF files from `ocean_tide_extrapolated/` directory containing FES2022 constituent data
-- Uses 24 tidal constituents for improved accuracy (primary, secondary, shallow water, long period)
-- Caches NetCDF datasets in memory
+- Creates one `NativeGridReader` at startup and reads `FES2022b_OceanTide_NSgrid.nc`
+- Uses all 34 FES2022b constituents
+- Harmonic synthesis receives amplitudes in metres and phase in degrees
+- No per-request NetCDF disk I/O after startup
+
+**Native Grid Reader** (`app/native_grid.py`):
+- Loads the FES2022b unstructured finite-element mesh and all requested constituents into RAM
+- Uses `scipy.spatial.cKDTree` for nearest-vertex candidate lookup
+- Performs LGP2 quadratic interpolation inside triangles
+- Falls back to nearest valid ocean vertex for small coastline misses
 
 **Data Files**:
-- `ocean_tide_extrapolated/` - Required FES2022 harmonic constituent NetCDF files (e.g., `m2_fes2022.nc`)
+- `FES2022b_OceanTide_NSgrid.nc` - Required FES2022b native-grid NetCDF file (~3.7 GB)
+- Runtime memory is roughly 8 GB locally; use at least a 16 GB production server
 
 **Environment Variables**:
-- `FES_DATA_PATH` - Path to data directory (defaults to `/data` in Docker, `./` locally)
+- `FES_DATA_PATH` - Directory containing `FES2022b_OceanTide_NSgrid.nc` (defaults to `/data` in Docker, `./` locally)
 - `STORMGLASS_API_KEY` - API key for Storm Glass (optional, for comparison endpoint)
 - `WORLDTIDES_API_KEY` - API key for WorldTides (optional, for comparison endpoint)
 
@@ -119,6 +131,7 @@ Returns HTML page comparing FES2022 against NOAA, WorldTides, and StormGlass for
 - Times are returned in ISO format; service supports timezone conversion via `timezone_str` parameter
 - Extrema detection uses gradient zero-crossings with 3-minute resolution + parabolic interpolation
 - Datum offset can be applied to convert MSL to chart datum
+- The app-level `FES2022TideService` singleton in `app/main.py` must be reused; do not instantiate it per request
 
 ## API Debugging Tips
 
@@ -148,6 +161,7 @@ Key dependencies include:
 - pydantic - Data validation
 - numpy - Numerical calculations
 - netCDF4 - Reading FES2022 data files
+- scipy - Native-grid spatial indexing (`cKDTree`)
 - python-dateutil - Timezone handling
 - timezonefinder - Automatic timezone detection
 - pytest - Testing framework
