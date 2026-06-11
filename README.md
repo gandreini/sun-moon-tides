@@ -2,6 +2,21 @@
 
 Sun Moon Tides is a REST API for tide predictions and astronomy data that works anywhere in the world. Just provide latitude and longitude coordinates for any point in the ocean and get back accurate predictions.
 
+## What's New — 2026-06-11
+
+This release migrates the tide engine to the new FES2022b native grid and hardens the public API:
+
+- **Much better accuracy near the coast**: predictions now run on a fine mesh that follows the real shape of coastlines (500 m to 4 km resolution near shore), instead of the old coarse regular grid. This fixes timing errors of up to 1–4 hours in harbors, estuaries, and shallow bays.
+- **34 tidal constituents** (up from 24): constituents are the individual astronomical "waves" (from the Moon, the Sun, and their cycles) that add up to the tide. The 10 new ones capture subtler effects — like how tides get distorted in shallow water and slow cycles spanning weeks — making predicted times and heights more accurate, especially in complex coastal areas.
+- **Zero per-request disk I/O**: all tide data is loaded into memory once at startup (~8 GB RAM, ≥16 GB recommended in production), eliminating the slowness and timeouts caused by reading from disk on every request.
+- **New comparison dashboard** (`/api/v1/comparison`): tide curve charts comparing our predictions against NOAA, WorldTides, and StormGlass for 17 global locations, with exact timing/range tables.
+- **Rate limiting**: the three public endpoints are now limited to 240 requests/minute per IP.
+- **New tests**: native-grid interpolation tests that run without the data file, comparison tests, and a `requires_grid` marker so grid-backed tests skip cleanly when the 3.7 GB data file isn't available.
+
+---
+
+## Overview
+
 The API provides three endpoints:
 
 - **`/api/v1/tides`** - High and low tide times with heights. Optionally returns tide heights at regular intervals (15, 30, or 60 minutes) for plotting tide curves. Supports different tidal datums (MSL, MLLW, LAT).
@@ -27,6 +42,8 @@ uvicorn app.main:app --reload
 API docs at http://localhost:8000/docs
 
 ## API Reference
+
+All public endpoints are rate-limited to **240 requests/minute per IP**. Exceeding the limit returns `429 Too Many Requests`.
 
 ### GET `/api/v1/tides`
 
@@ -135,6 +152,12 @@ http://localhost:8000/api/v1/comparison
 ```
 
 Useful for evaluating accuracy in different regions. Each location shows a FES2022b tide curve with external-provider high/low markers overlaid, plus exact timing/range numbers in a collapsed table.
+
+![Comparison view for Cocoa Beach, Florida — FES2022 tide curve with NOAA, StormGlass, and WorldTides markers](docs/images/comparison-cocoa-beach.png)
+
+![Comparison view for Ocean Beach, San Francisco — FES2022 closely tracking NOAA and WorldTides](docs/images/comparison-ocean-beach-sf.png)
+
+![Comparison view for Cape Town, South Africa — FES2022 vs StormGlass and WorldTides](docs/images/comparison-cape-town.png)
 
 ## Python Usage
 
