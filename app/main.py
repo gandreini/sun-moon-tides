@@ -40,6 +40,8 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+PUBLIC_API_RATE_LIMIT = "240/minute"
+
 # Add security headers middleware
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -101,7 +103,9 @@ def _combine_tide_curve_and_extrema(heights: list[dict], events: list[dict]) -> 
 
 
 @app.get("/api/v1/tides")
+@limiter.limit(PUBLIC_API_RATE_LIMIT)
 async def get_tides(
+    request: Request,
     lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
     lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
     days: int = Query(7, ge=1, le=365, description="Number of days to predict"),
@@ -166,7 +170,9 @@ async def get_tides(
 
 
 @app.get("/api/v1/sun-moon")
+@limiter.limit(PUBLIC_API_RATE_LIMIT)
 async def get_sun_moon(
+    request: Request,
     lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
     lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
     days: int = Query(7, ge=1, le=365, description="Number of days to predict (1-365)"),
@@ -205,7 +211,9 @@ async def get_sun_moon(
 
 
 @app.get("/api/v1/sun-moon-tides")
+@limiter.limit(PUBLIC_API_RATE_LIMIT)
 async def get_sun_moon_tides(
+    request: Request,
     lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
     lon: float = Query(..., ge=-180, le=180, description="Longitude in degrees"),
     days: int = Query(7, ge=1, le=365, description="Number of days to predict (1-365)"),
